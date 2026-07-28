@@ -1,13 +1,12 @@
 import SwiftUI
 
 private struct TokenUsageMetric: Identifiable {
-    let title: String
     let value: String
     let detail: String
     let icon: String
     let color: Color
 
-    var id: String { title }
+    var id: String { detail }
 }
 
 private enum TokenUsagePeriod {
@@ -21,7 +20,7 @@ struct TokenUsageView: View {
     let info: TokenUsageInfo?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Token 消耗")
                 .font(.title3.weight(.semibold))
 
@@ -31,8 +30,8 @@ struct TokenUsageView: View {
                 emptyState
             }
         }
-        .padding(16)
-        .frame(width: 620)
+        .padding(14)
+        .frame(width: 560)
         .background(Color(red: 0.93, green: 0.96, blue: 1.0))
     }
 
@@ -52,9 +51,9 @@ struct TokenUsageView: View {
     /// 使用三张卡片展示三个自然时间范围的真实 Token 汇总。
     private func summaryCards(_ info: TokenUsageInfo) -> some View {
         let metrics = [
-            TokenUsageMetric(title: "今日 Token", value: compact(periodTotal(info, period: .day)), detail: "今日消耗", icon: "sun.max", color: .teal),
-            TokenUsageMetric(title: "本周 Token", value: compact(periodTotal(info, period: .week)), detail: "近 7 天消耗", icon: "calendar", color: .blue),
-            TokenUsageMetric(title: "本月 Token", value: compact(periodTotal(info, period: .month)), detail: "本月消耗", icon: "calendar.badge.clock", color: .indigo)
+            TokenUsageMetric(value: compact(periodTotal(info, period: .day)), detail: "今日消耗", icon: "sun.max", color: .teal),
+            TokenUsageMetric(value: compact(periodTotal(info, period: .week)), detail: "近 7 天消耗", icon: "calendar", color: .blue),
+            TokenUsageMetric(value: compact(periodTotal(info, period: .month)), detail: "本月消耗", icon: "calendar.badge.clock", color: .indigo)
         ]
 
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
@@ -91,30 +90,26 @@ struct TokenUsageView: View {
         }
     }
 
-    /// 统一四张 Token 摘要卡片的图标、主数值和辅助说明样式。
+    /// 统一三张 Token 摘要卡片的图标、周期说明和主数值样式。
     private func metricCard(_ metric: TokenUsageMetric) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: metric.icon)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(metric.color)
-                .frame(width: 27, height: 27)
-                .background(metric.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                .frame(width: 24, height: 24)
+                .background(metric.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 2) {
-                Text(metric.title)
+                Text(metric.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(metric.value)
                     .font(.system(.title3, design: .rounded).weight(.semibold))
                     .monospacedDigit()
-                Text(metric.detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
         }
-        .padding(10)
-        .frame(minHeight: 78, alignment: .topLeading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .padding(8)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .center)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
     }
 
     /// 解析本地统计接口使用的 ISO 日期。

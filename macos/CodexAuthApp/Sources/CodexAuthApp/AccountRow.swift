@@ -99,6 +99,7 @@ struct AccountRow: View {
         window.menuBarUsageTone.usageColor
     }
 
+    /// 非管理态统一占用固定宽度，确保“使用中”与“切换”的字号和中心线一致。
     @ViewBuilder
     private var rowActions: some View {
         if isManaging {
@@ -113,15 +114,20 @@ struct AccountRow: View {
                     appState.requestDelete(account)
                 }
             }
-        } else if account.isActive {
-            Text("使用中")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         } else {
-            Button("切换") {
-                Task { await appState.switchAccount(accountKey: account.accountKey) }
+            Group {
+                if account.isActive {
+                    Text("使用中")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("切换") {
+                        Task { await appState.switchAccount(accountKey: account.accountKey) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
-            .buttonStyle(.borderedProminent)
+            .font(.body)
+            .frame(width: 76, alignment: .center)
         }
     }
 
