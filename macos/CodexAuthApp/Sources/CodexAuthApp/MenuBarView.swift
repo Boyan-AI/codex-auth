@@ -6,6 +6,8 @@ struct MenuBarView: View {
     @State private var isManagingAccounts = false
     @State private var isAddingAccount = false
     @State private var newAccountAlias = ""
+    @State private var isShowingTokenUsage = false
+    @State private var isShowingDeletedAccounts = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -39,17 +41,44 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Codex 账号")
-                .font(.headline)
-            if let active = appState.state?.activeAccount {
-                Text(active.primaryLabel)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-            } else {
-                Text("暂无活动账号")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Codex 账号")
+                    .font(.headline)
+                if let active = appState.state?.activeAccount {
+                    Text(active.primaryLabel)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                } else {
+                    Text("暂无活动账号")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            HStack(spacing: 8) {
+                Button {
+                    isShowingTokenUsage.toggle()
+                } label: {
+                    Label(
+                        "今日 \(appState.tokenUsage?.todayTotalText ?? "--")",
+                        systemImage: "chart.bar.xaxis"
+                    )
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .popover(isPresented: $isShowingTokenUsage, arrowEdge: .top) {
+                    TokenUsageView(info: appState.tokenUsage)
+                }
+
+                Button {
+                    Task { await appState.refreshUsage() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .help("刷新")
             }
         }
     }
@@ -74,13 +103,6 @@ struct MenuBarView: View {
     private var actions: some View {
         HStack(spacing: 6) {
             Button {
-                Task { await appState.refreshUsage() }
-            } label: {
-                compactLabel("刷新", systemImage: "arrow.clockwise")
-            }
-            .frame(maxWidth: .infinity)
-
-            Button {
                 withAnimation(.snappy) {
                     isAddingAccount.toggle()
                 }
@@ -96,9 +118,9 @@ struct MenuBarView: View {
             }
             .frame(maxWidth: .infinity)
 
-            Button {
-                withAnimation(.snappy) {
-                    isManagingAccounts.toggle()
+                Button {
+                    withAnimation(.snappy) {
+                        isManagingAccounts.toggle()
                 }
             } label: {
                 Label(
@@ -108,6 +130,16 @@ struct MenuBarView: View {
                 .labelStyle(.titleAndIcon)
             }
             .frame(maxWidth: .infinity)
+
+            Button {
+                isShowingDeletedAccounts.toggle()
+            } label: {
+                compactLabel("失效", systemImage: "archivebox")
+            }
+            .frame(maxWidth: .infinity)
+            .popover(isPresented: $isShowingDeletedAccounts, arrowEdge: .bottom) {
+                DeletedAccountsView(records: appState.deletedAccounts)
+            }
 
             Button {
                 NSApplication.shared.terminate(nil)

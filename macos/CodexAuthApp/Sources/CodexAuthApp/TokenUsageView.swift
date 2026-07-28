@@ -1,0 +1,186 @@
+import SwiftUI
+
+private struct TokenUsageMetric: Identifiable {
+    let title: String
+    let value: String
+    let detail: String
+    let icon: String
+    let color: Color
+
+    var id: String { title }
+}
+
+private enum TokenUsagePeriod {
+    case day
+    case week
+    case month
+}
+
+    /// 展示今日、本周和本月的 Token 消耗摘要。
+struct TokenUsageView: View {
+    let info: TokenUsageInfo?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Token 消耗")
+                .font(.title3.weight(.semibold))
+
+            if let info {
+                summaryCards(info)
+            } else {
+                emptyState
+            }
+        }
+        .padding(16)
+        .frame(width: 620)
+        .background(Color(red: 0.93, green: 0.96, blue: 1.0))
+    }
+
+    /// 无统计数据时保持页面结构完整，避免弹窗高度跳变。
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("暂无 Token 数据")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .background(.background, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// 使用三张卡片展示三个自然时间范围的真实 Token 汇总。
+    private func summaryCards(_ info: TokenUsageInfo) -> some View {
+        let metrics = [
+            TokenUsageMetric(title: "今日 Token", value: compact(periodTotal(info, period: .day)), detail: "今日消耗", icon: "sun.max", color: .teal),
+            TokenUsageMetric(title: "本周 Token", value: compact(periodTotal(info, period: .week)), detail: "近 7 天消耗", icon: "calendar", color: .blue),
+            TokenUsageMetric(title: "本月 Token", value: compact(periodTotal(info, period: .month)), detail: "本月消耗", icon: "calendar.badge.clock", color: .indigo)
+        ]
+
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+            ForEach(metrics) { metric in
+                metricCard(metric)
+            }
+        }
+    }
+
+    /// 按本地统计日明细聚合今日、本周、本月和本年总 Token。
+    private func periodTotal(_ info: TokenUsageInfo, period: TokenUsagePeriod) -> Int64 {
+        guard let latestDate = info.days.compactMap({ parseDate($0.date) }).max() else {
+            return 0
+        }
+
+        if period == .day, let today = info.today {
+            return today.totals.totalTokens
+        }
+
+        let calendar = Calendar(identifier: .gregorian)
+        return info.days.reduce(0) { total, day in
+            guard let date = parseDate(day.date) else { return total }
+            let matches: Bool
+            switch period {
+            case .day:
+                matches = false
+            case .week:
+                matches = date >= (calendar.date(byAdding: .day, value: -6, to: latestDate) ?? latestDate)
+            case .month:
+                matches = calendar.component(.year, from: date) == calendar.component(.year, from: latestDate)
+                    && calendar.component(.month, from: date) == calendar.component(.month, from: latestDate)
+            }
+            return matches ? total + day.totals.totalTokens : total
+        }
+    }
+
+    /// 统一四张 Token 摘要卡片的图标、主数值和辅助说明样式。
+    private func metricCard(_ metric: TokenUsageMetric) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: metric.icon)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(metric.color)
+                .frame(width: 27, height: 27)
+                .background(metric.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(metric.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(metric.value)
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                Text(metric.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(minHeight: 78, alignment: .topLeading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// 解析本地统计接口使用的 ISO 日期。
+    private func parseDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.date(from: value)
+    }
+
+    private func compact(_ value: Int64) -> String {
+        TokenUsageFormatter.compact(value)
+    }
+}
+
+/// 展示由菜单栏 App 删除的失效账号，作为后续账号用量分析的清单入口。
+struct DeletedAccountsView: View {
+    let records: [DeletedAccountRecord]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("失效账号")
+                    .font(.headline)
+                Spacer()
+                Text("共 \(records.count) 个")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if records.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "archivebox")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("暂无已删除账号")
+                        .foregroundStyle(.secondary)
+                }
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(records) { record in
+                            HStack(spacing: 10) {
+                                Image(systemName: "person.crop.circle.badge.xmark")
+                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(record.label)
+                                        .font(.callout.weight(.semibold))
+                                    Text(record.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(record.deletedAt, style: .date)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}

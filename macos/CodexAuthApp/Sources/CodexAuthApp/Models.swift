@@ -25,6 +25,7 @@ struct CodexAuthState: Decodable, Equatable {
     let refresh: RefreshInfo
     var resetCredits: ResetCreditsInfo? = nil
     let warnings: [String]
+    var tokenUsage: TokenUsageInfo? = nil
     let accounts: [CodexAccount]
 
     var activeAccount: CodexAccount? {
@@ -42,6 +43,101 @@ struct CodexAuthState: Decodable, Equatable {
             warnings: [],
             accounts: []
         )
+    }
+}
+
+struct TokenUsageInfo: Decodable, Equatable {
+    let timezone: String
+    let summary: TokenUsageTotals
+    let today: TokenUsageDay?
+    let latestDay: TokenUsageDay?
+    let days: [TokenUsageDay]
+    let quality: TokenUsageQuality
+
+    var todayTotalText: String {
+        TokenUsageFormatter.compact(today?.totals.totalTokens ?? 0)
+    }
+}
+
+struct TokenUsageTotals: Decodable, Equatable {
+    let inputTokens: Int64
+    let cachedInputTokens: Int64
+    let outputTokens: Int64
+    let reasoningOutputTokens: Int64
+    let totalTokens: Int64
+}
+
+struct TokenUsageDay: Decodable, Equatable, Identifiable {
+    let date: String
+    let sessions: Int
+    let totals: TokenUsageTotals
+
+    var id: String { date }
+}
+
+struct TokenUsageQuality: Decodable, Equatable {
+    let filesScanned: Int
+    let filesWithUsage: Int
+    let repeatedSnapshots: Int
+    let segmentedSessions: Int
+    let parseErrors: Int
+
+    var hasWarnings: Bool {
+        segmentedSessions > 0 || parseErrors > 0
+    }
+}
+
+/// 记录由菜单栏 App 删除的账号，避免账号从主列表消失后无法追踪。
+struct DeletedAccountRecord: Codable, Equatable, Identifiable {
+    let accountKey: String
+    let label: String
+    let detail: String
+    let deletedAt: Date
+
+    var id: String { accountKey }
+}
+
+/// 使用 App 自己的偏好存储持久化失效账号清单，不改动 Codex 原始账号文件。
+enum DeletedAccountStore {
+    private static let key = "deleted-account-records"
+
+    static func load() -> [DeletedAccountRecord] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let records = try? JSONDecoder().decode([DeletedAccountRecord].self, from: data)
+        else {
+            return []
+        }
+        return records.sorted { $0.deletedAt > $1.deletedAt }
+    }
+
+    static func append(_ account: CodexAccount) {
+        var records = load().filter { $0.accountKey != account.accountKey }
+        records.insert(
+            DeletedAccountRecord(
+                accountKey: account.accountKey,
+                label: account.primaryLabel,
+                detail: account.secondaryLabel,
+                deletedAt: Date()
+            ),
+            at: 0
+        )
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+enum TokenUsageFormatter {
+    static func compact(_ value: Int64) -> String {
+        if value >= 1_000_000_000 {
+            return String(format: "%.1fB", Double(value) / 1_000_000_000)
+        }
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.1fK", Double(value) / 1_000)
+        }
+        return "\(value)"
     }
 }
 

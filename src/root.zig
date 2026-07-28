@@ -21,6 +21,7 @@ pub const core = struct {
 
 pub const registry = @import("registry/root.zig");
 pub const session = @import("session.zig");
+pub const token_usage = @import("token_usage.zig");
 
 pub const terminal = struct {
     pub const color = @import("terminal/color.zig");

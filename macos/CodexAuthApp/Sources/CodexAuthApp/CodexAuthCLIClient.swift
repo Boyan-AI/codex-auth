@@ -12,6 +12,7 @@ protocol CommandRunning {
 
 protocol CodexAuthClientProtocol {
     func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState
+    func loadTokenUsage() async throws -> TokenUsageInfo
     func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState
     func switchAccount(accountKey: String) async throws -> CodexAuthState
     func removeAccount(accountKey: String) async throws -> CodexAuthState
@@ -20,6 +21,12 @@ protocol CodexAuthClientProtocol {
     func login() async throws -> CodexAuthState
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState
     func openNewCodexSession(at directoryPath: String) async throws
+}
+
+extension CodexAuthClientProtocol {
+    func loadTokenUsage() async throws -> TokenUsageInfo {
+        throw CodexAuthCLIError.commandFailed("Token usage is unavailable")
+    }
 }
 
 enum CodexAuthCLIError: LocalizedError, Equatable {
@@ -55,6 +62,20 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
 
     func loadState(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
         try await runStateCommand(["gui", "state"] + apiMode.arguments)
+    }
+
+    func loadTokenUsage() async throws -> TokenUsageInfo {
+        let result = try await runner.run(executableURL: executableURL, arguments: ["gui", "stats"])
+        guard result.exitCode == 0 else {
+            let stderr = String(data: result.standardError, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : "unknown error")
+        }
+        do {
+            return try JSONDecoder.codexAuth.decode(TokenUsageInfo.self, from: result.standardOutput)
+        } catch {
+            throw CodexAuthCLIError.invalidJSON(error.localizedDescription)
+        }
     }
 
     func refresh(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {

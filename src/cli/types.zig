@@ -91,6 +91,7 @@ pub const GuiAliasOptions = union(enum) {
 pub const GuiOptions = union(enum) {
     state: GuiStateOptions,
     refresh: GuiStateOptions,
+    stats: void,
     switch_account: []u8,
     login: LoginOptions,
     import_auth: GuiImportOptions,

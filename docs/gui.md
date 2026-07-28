@@ -11,6 +11,7 @@ results and failures into Chinese UI text.
 ```shell
 codex-auth gui state [--active] [--api|--skip-api]
 codex-auth gui refresh [--active] [--api|--skip-api]
+codex-auth gui stats
 codex-auth gui switch <account-key>
 codex-auth gui remove <account-key>
 codex-auth gui alias set <account-key> <alias>
@@ -21,6 +22,21 @@ codex-auth gui login [--device-auth]
 
 `state` reads stored registry data and syncs the active `auth.json` when possible.
 `refresh` also runs the existing foreground usage refresh path before returning state.
+
+`stats` scans local Codex rollout JSONL files and returns token usage aggregates. It
+uses deltas between successive `total_token_usage` snapshots, so repeated snapshots
+from rate-limit updates are not counted twice. The result is local telemetry and is
+not an official subscription bill or quota ledger. `today` is the current UTC day;
+`days` contains the complete daily series so the macOS app can aggregate it into
+daily, weekly, monthly, and yearly charts.
+
+Token stats fields:
+
+- `summary`: all scanned token totals.
+- `today`: current UTC day total, or `null` when there is no usage today.
+- `days`: daily totals with `date`, `sessions`, and `totals`.
+- `latest_day`: retained for compatibility with the first preview version.
+- `quality`: scanner diagnostics for CLI troubleshooting; the macOS app does not show this field.
 Mutation commands return the updated state after saving.
 
 ## State JSON

@@ -16,6 +16,10 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     const subcommand = std.mem.sliceTo(args[0], 0);
     if (std.mem.eql(u8, subcommand, "state")) return parseStateLike(allocator, .state, args[1..]);
     if (std.mem.eql(u8, subcommand, "refresh")) return parseStateLike(allocator, .refresh, args[1..]);
+    if (std.mem.eql(u8, subcommand, "stats")) {
+        if (args.len > 1) return common.usageErrorResult(allocator, .gui, "unexpected argument for `gui stats`.", .{});
+        return .{ .command = .{ .gui = .{ .stats = {} } } };
+    }
     if (std.mem.eql(u8, subcommand, "switch")) return parseAccountKeyCommand(allocator, "gui switch", .switch_account, args[1..]);
     if (std.mem.eql(u8, subcommand, "remove")) return parseAccountKeyCommand(allocator, "gui remove", .remove_account, args[1..]);
     if (std.mem.eql(u8, subcommand, "login")) return parseLogin(allocator, args[1..]);

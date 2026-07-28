@@ -7,17 +7,29 @@ const usage_api = @import("../api/usage.zig");
 const live_flow = @import("live.zig");
 const login_workflow = @import("login.zig");
 const usage_refresh = @import("usage.zig");
+const token_usage = @import("../token_usage.zig");
 
 pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiOptions) !void {
     switch (opts) {
         .state => |state_opts| try handleState(allocator, codex_home, state_opts, false),
         .refresh => |state_opts| try handleState(allocator, codex_home, state_opts, true),
+        .stats => try handleStats(allocator, codex_home),
         .switch_account => |account_key| try handleSwitch(allocator, codex_home, account_key),
         .login => |login_opts| try handleLogin(allocator, codex_home, login_opts),
         .import_auth => |import_opts| try handleImport(allocator, codex_home, import_opts),
         .remove_account => |account_key| try handleRemove(allocator, codex_home, account_key),
         .alias => |alias_opts| try handleAlias(allocator, codex_home, alias_opts),
     }
+}
+
+fn handleStats(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    var report = try token_usage.scan(allocator, codex_home);
+    defer report.deinit(allocator);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try token_usage.writeJson(&report, stdout.out());
+    try stdout.out().writeAll("\n");
+    try stdout.out().flush();
 }
 
 fn handleState(

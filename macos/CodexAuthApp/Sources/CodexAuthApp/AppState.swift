@@ -6,6 +6,8 @@ final class AppState: ObservableObject {
     nonisolated static let defaultPeriodicRefreshIntervalNanoseconds: UInt64 = 60_000_000_000
 
     @Published private(set) var state: CodexAuthState?
+    @Published private(set) var tokenUsage: TokenUsageInfo?
+    @Published private(set) var deletedAccounts: [DeletedAccountRecord]
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var notice: String?
@@ -25,6 +27,7 @@ final class AppState: ObservableObject {
     ) {
         self.client = client
         self.usageAlertPresenter = usageAlertPresenter ?? DisabledUsageAlertPresenter()
+        self.deletedAccounts = DeletedAccountStore.load()
     }
 
     deinit {
@@ -50,6 +53,7 @@ final class AppState: ObservableObject {
         }
         didRefreshOnAppLaunch = true
         await refreshUsage(apiMode: apiMode)
+        await loadTokenUsageData()
     }
 
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
@@ -57,6 +61,7 @@ final class AppState: ObservableObject {
             return
         }
         await refreshUsage(apiMode: apiMode)
+        await loadTokenUsageData()
     }
 
     func startPeriodicRefresh(
@@ -89,6 +94,13 @@ final class AppState: ObservableObject {
         await load { try await client.refresh(apiMode: apiMode) }
     }
 
+    func loadTokenUsageData() async {
+        do {
+            tokenUsage = try await client.loadTokenUsage()
+        } catch {
+        }
+    }
+
     func switchAccount(accountKey: String) async {
         await load {
             let state = try await client.switchAccount(accountKey: accountKey)
@@ -112,6 +124,8 @@ final class AppState: ObservableObject {
         pendingDeleteAccount = nil
         await load {
             let state = try await client.removeAccount(accountKey: account.accountKey)
+            DeletedAccountStore.append(account)
+            deletedAccounts = DeletedAccountStore.load()
             notice = "已删除账号。"
             return state
         }
