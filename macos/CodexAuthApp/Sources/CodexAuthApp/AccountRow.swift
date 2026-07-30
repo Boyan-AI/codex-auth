@@ -43,7 +43,8 @@ struct AccountRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(appState.isLoading)
+        // 后台额度刷新不应锁住直连账号选择，只阻止重复账号切换。
+        .disabled(appState.isAccountSwitchInProgress)
         .background(selectionBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }

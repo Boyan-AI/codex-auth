@@ -2019,6 +2019,7 @@ test "export accounts writes cpa token files to default backup directory" {
     defer gpa.free(exported_path);
     const exported = try fixtures.readFileAlloc(gpa, exported_path);
     defer gpa.free(exported);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"type\": \"codex\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
 }

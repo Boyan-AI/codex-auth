@@ -9,6 +9,8 @@ const login_workflow = @import("login.zig");
 const usage_refresh = @import("usage.zig");
 const token_usage = @import("../token_usage.zig");
 
+const reset_credits_refresh_concurrency: usize = 5;
+
 pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiOptions) !void {
     switch (opts) {
         .state => |state_opts| try handleState(allocator, codex_home, state_opts, false),
@@ -84,7 +86,7 @@ fn handleState(
     var reset_credits_by_account: ?[]?usage_api.ResetCreditsInfo = null;
     defer if (reset_credits_by_account) |values| {
         for (values) |*value| {
-            if (value.*) |*info| info.deinit(allocator);
+            if (value.*) |*info| info.deinit(std.heap.smp_allocator);
         }
         allocator.free(values);
     };
@@ -99,15 +101,22 @@ fn handleState(
             opts.active_only,
         );
         if (usage_api_enabled) {
-            const values = try allocator.alloc(?usage_api.ResetCreditsInfo, reg.accounts.items.len);
-            reset_credits_by_account = values;
-            for (values) |*value| value.* = null;
-            // 打开菜单时在后台一次查询全部账号，完成后由 GUI 一次性更新详情。
-            for (reg.accounts.items, 0..) |account, idx| {
-                const auth_path = registry.accountAuthPath(allocator, codex_home, account.account_key) catch continue;
-                defer allocator.free(auth_path);
-                values[idx] = usage_api.fetchResetCreditsForAuthPath(allocator, auth_path) catch null;
+            const auth_paths = try allocator.alloc([]u8, reg.accounts.items.len);
+            var initialized_paths: usize = 0;
+            defer {
+                for (auth_paths[0..initialized_paths]) |auth_path| allocator.free(auth_path);
+                allocator.free(auth_paths);
             }
+            for (reg.accounts.items, 0..) |account, idx| {
+                auth_paths[idx] = try registry.accountAuthPath(allocator, codex_home, account.account_key);
+                initialized_paths += 1;
+            }
+            // 打开菜单时以有界并发查询全部账号，完成后仍由 GUI 一次性合并详情。
+            reset_credits_by_account = try fetchResetCreditsConcurrently(
+                allocator,
+                auth_paths,
+                reset_credits_refresh_concurrency,
+            );
         }
     }
     var active_reset_credits: ?*const usage_api.ResetCreditsInfo = null;
@@ -132,6 +141,55 @@ fn handleState(
         reset_credits_by_account,
         if (refresh_state) |state| state.usage_overrides else null,
     );
+}
+
+// 保存 reset credit 并发任务的只读输入、独立结果槽位和原子游标。
+const ResetCreditsWorkerQueue = struct {
+    auth_paths: []const []const u8,
+    values: []?usage_api.ResetCreditsInfo,
+    next_index: std.atomic.Value(usize) = .init(0),
+
+    // 每个工作线程仅写入独立索引；返回值统一使用线程安全分配器并由调用方释放。
+    fn run(self: *ResetCreditsWorkerQueue) void {
+        while (true) {
+            const idx = self.next_index.fetchAdd(1, .monotonic);
+            if (idx >= self.auth_paths.len) return;
+            self.values[idx] = usage_api.fetchResetCreditsForAuthPath(
+                std.heap.smp_allocator,
+                self.auth_paths[idx],
+            ) catch null;
+        }
+    }
+};
+
+// 使用当前线程和有限辅助线程共同消费账号队列，避免单账号超时按账号数累加。
+fn fetchResetCreditsConcurrently(
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+) ![]?usage_api.ResetCreditsInfo {
+    const values = try allocator.alloc(?usage_api.ResetCreditsInfo, auth_paths.len);
+    errdefer allocator.free(values);
+    for (values) |*value| value.* = null;
+    if (auth_paths.len == 0) return values;
+
+    var queue: ResetCreditsWorkerQueue = .{
+        .auth_paths = auth_paths,
+        .values = values,
+    };
+    const worker_count = @min(auth_paths.len, @max(@as(usize, 1), max_concurrency));
+    const helper_count = worker_count - 1;
+    const threads = try allocator.alloc(std.Thread, helper_count);
+    defer allocator.free(threads);
+
+    var spawned_count: usize = 0;
+    for (threads) |*thread| {
+        thread.* = std.Thread.spawn(.{}, ResetCreditsWorkerQueue.run, .{&queue}) catch break;
+        spawned_count += 1;
+    }
+    queue.run();
+    for (threads[0..spawned_count]) |thread| thread.join();
+    return values;
 }
 
 fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !void {

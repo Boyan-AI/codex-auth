@@ -2,6 +2,12 @@ import XCTest
 @testable import CodexAuthApp
 
 final class CPARuntimeTests: XCTestCase {
+    /// 每个测试结束后清除协议回调，避免请求桩跨测试泄漏。
+    override func tearDown() {
+        CPAStubURLProtocol.handler = nil
+        super.tearDown()
+    }
+
     /// 验证本机地址和模型端点的规范化结果。
     func testConfigurationAcceptsLocalCPAAddress() throws {
         let configuration = try CPAConfiguration(
@@ -88,6 +94,67 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(configuration.authDirectoryPath, "/tmp/installed-auth")
     }
 
+    /// 验证模型目录只保留非空标识，供健康检查判断 CPA 是否具备实际路由能力。
+    func testModelCatalogDecodesAvailableModels() throws {
+        let data = Data(#"{"object":"list","data":[{"id":"gpt-5.6-sol"},{"id":"  "}]}"#.utf8)
+
+        let catalog = try CPAModelCatalog.decode(data)
+
+        XCTAssertEqual(catalog.modelIDs, ["gpt-5.6-sol"])
+    }
+
+    /// 验证 CPA 虽返回 HTTP 200 但没有模型时，健康检查仍明确失败。
+    func testHealthCheckerRejectsEmptyModelCatalog() async throws {
+        let configuration = try CPAConfiguration(
+            baseURLString: "http://127.0.0.1:8317/v1",
+            apiKey: "local-key"
+        )
+        CPAStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer local-key")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"object":"list","data":[]}"#.utf8))
+        }
+
+        let checker = URLSessionCPAHealthChecker(session: makeCPAStubSession())
+
+        do {
+            try await checker.validate(configuration)
+            XCTFail("Expected an empty model catalog to fail the CPA health check")
+        } catch {
+            XCTAssertEqual(error as? CPARuntimeError, .unavailable("未发现可用模型"))
+        }
+    }
+
+    /// 验证至少存在一个模型时，受保护模型端点可通过健康检查。
+    func testHealthCheckerAcceptsAvailableModelCatalog() async throws {
+        let configuration = try CPAConfiguration(
+            baseURLString: "http://127.0.0.1:8317/v1",
+            apiKey: "local-key"
+        )
+        CPAStubURLProtocol.handler = { request in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"object":"list","data":[{"id":"gpt-5.6-sol"}]}"#.utf8))
+        }
+
+        let checker = URLSessionCPAHealthChecker(session: makeCPAStubSession())
+
+        try await checker.validate(configuration)
+    }
+
     /// 验证事件队列只提取记录数量和会影响额度刷新决策的 429 状态。
     func testEventBatchDecodesQuotaExceededStatus() throws {
         let data = Data(#"[{"fail":null},{"fail":{"status_code":429}},{"fail":{"status_code":500}}]"#.utf8)
@@ -97,4 +164,45 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(batch.eventCount, 3)
         XCTAssertTrue(batch.quotaExceeded)
     }
+
+    /// 创建仅由测试 URLProtocol 响应的隔离会话，不访问真实 CPA 服务。
+    private func makeCPAStubSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CPAStubURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
+/// 为 CPA 健康检查提供可控 HTTP 响应，避免单元测试依赖本机服务。
+private final class CPAStubURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    /// 接管测试会话中的所有请求。
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    /// 测试不需要改写请求，直接返回原请求。
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    /// 调用测试注入的处理器并把结果交还 URLSession。
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    /// 测试响应同步完成，无需额外取消工作。
+    override func stopLoading() {}
 }

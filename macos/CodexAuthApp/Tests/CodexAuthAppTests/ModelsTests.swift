@@ -130,6 +130,44 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(account.secondaryLabel, "me***@example.com")
     }
 
+    /// 验证默认排序严格保留后端返回的账号添加顺序。
+    func testAccountOrderingPreservesAddedOrderByDefault() {
+        let accounts = [
+            makeAccount(accountKey: "first", remainingPercent: 10),
+            makeAccount(accountKey: "second", remainingPercent: 90),
+            makeAccount(accountKey: "third", remainingPercent: nil)
+        ]
+
+        XCTAssertEqual(AccountOrdering.sorted(accounts, by: .added).map(\.accountKey), ["first", "second", "third"])
+    }
+
+    /// 验证额度排序降序、未知值置后，并保持相同额度的添加顺序。
+    func testAccountOrderingSortsQuotaDescendingAndStably() {
+        let accounts = [
+            makeAccount(accountKey: "low", remainingPercent: 10),
+            makeAccount(accountKey: "high-first", remainingPercent: 90),
+            makeAccount(accountKey: "unknown", remainingPercent: nil),
+            makeAccount(accountKey: "high-second", remainingPercent: 90)
+        ]
+
+        XCTAssertEqual(
+            AccountOrdering.sorted(accounts, by: .quota).map(\.accountKey),
+            ["high-first", "high-second", "low", "unknown"]
+        )
+    }
+
+    /// 验证异常窗口尺寸恢复默认值，合法用户尺寸保持不变。
+    func testManagementWindowLayoutNormalizesInvalidContentSize() {
+        XCTAssertEqual(
+            ManagementWindowLayout.normalizedContentSize(NSSize(width: 1_600, height: 120)),
+            ManagementWindowLayout.defaultContentSize
+        )
+        XCTAssertEqual(
+            ManagementWindowLayout.normalizedContentSize(NSSize(width: 1_100, height: 700)),
+            NSSize(width: 1_100, height: 700)
+        )
+    }
+
     func testUnknownUsageUsesChineseFallback() throws {
         let window = UsageWindow(status: "missing_auth", remainingPercent: nil, total: nil, used: nil, resetAt: nil)
 
@@ -326,6 +364,33 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(
             presentation.lineOrigins(containerHeight: 24, textHeight: 11, lineSpacing: 10),
             [6]
+        )
+    }
+
+    /// 构造指定周额度的排序测试账号。
+    private func makeAccount(accountKey: String, remainingPercent: Int?) -> CodexAccount {
+        CodexAccount(
+            accountKey: accountKey,
+            displayName: accountKey,
+            alias: accountKey,
+            email: "\(accountKey)@example.com",
+            accountName: nil,
+            plan: "plus",
+            authMode: "chatgpt",
+            smartPoolEnabled: true,
+            isActive: false,
+            usage: UsageInfo(
+                fiveHour: nil,
+                sevenDay: UsageWindow(
+                    status: remainingPercent == nil ? "network_error" : "ok",
+                    remainingPercent: remainingPercent,
+                    total: remainingPercent == nil ? nil : 100,
+                    used: remainingPercent.map { 100 - $0 },
+                    resetAt: nil
+                )
+            ),
+            lastUsageAt: nil,
+            lastRefreshAt: nil
         )
     }
 }

@@ -214,18 +214,46 @@ struct URLSessionCPAHealthChecker: CPAHealthChecking {
         request.timeoutInterval = 3
         request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
         do {
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode)
             else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 throw CPARuntimeError.unavailable("HTTP \(status)")
             }
+            let catalog = try CPAModelCatalog.decode(data)
+            guard !catalog.modelIDs.isEmpty else {
+                throw CPARuntimeError.unavailable("未发现可用模型")
+            }
         } catch let error as CPARuntimeError {
             throw error
         } catch {
             throw CPARuntimeError.unavailable(error.localizedDescription)
         }
+    }
+}
+
+/// 保存健康检查所需的最小 CPA 模型目录，避免仅凭 HTTP 200 误判连接可用。
+struct CPAModelCatalog: Equatable {
+    let modelIDs: [String]
+
+    /// 解码 OpenAI 兼容模型列表，并忽略空白模型标识。
+    static func decode(_ data: Data) throws -> CPAModelCatalog {
+        let response = try JSONDecoder().decode(Response.self, from: data)
+        return CPAModelCatalog(
+            modelIDs: response.data
+                .map(\.id)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private struct Response: Decodable {
+        let data: [Model]
+    }
+
+    private struct Model: Decodable {
+        let id: String
     }
 }
 

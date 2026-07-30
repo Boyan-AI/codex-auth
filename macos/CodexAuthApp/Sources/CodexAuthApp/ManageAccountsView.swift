@@ -16,6 +16,7 @@ struct ManageAccountsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var searchText = ""
     @State private var selectedFilter: AccountStatusFilter = .all
+    @State private var selectedSortOrder: AccountSortOrder = .added
     @State private var selectedAccountID: CodexAccount.ID?
     @State private var isAddingAccount = false
     @State private var reloginAccount: CodexAccount?
@@ -27,24 +28,31 @@ struct ManageAccountsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             List(filteredAccounts, selection: $selectedAccountID) { account in
                 accountListRow(account)
             }
-            .searchable(text: $searchText, prompt: "搜索账号")
-            .navigationTitle("账号")
-            .toolbar { accountToolbar }
-        } detail: {
-            if let account = selectedAccount ?? filteredAccounts.first {
-                AccountDetailView(
-                    account: account,
-                    onRelogin: { reloginAccount = account },
-                    onDelete: { deleteAccount = account }
-                )
-            } else {
-                emptyState
+            .scrollIndicators(.hidden)
+            .frame(width: 200)
+
+            Divider()
+
+            Group {
+                if let account = selectedAccount ?? filteredAccounts.first {
+                    AccountDetailView(
+                        account: account,
+                        onRelogin: { reloginAccount = account },
+                        onDelete: { deleteAccount = account }
+                    )
+                } else {
+                    emptyState
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .searchable(text: $searchText, prompt: "搜索账号")
+        .navigationTitle("账号")
+        .toolbar { accountToolbar }
         .sheet(isPresented: $isAddingAccount) {
             AccountLoginSheet(title: "添加账号", initialAlias: "") { alias in
                 Task { await appState.login(alias: alias) }
@@ -68,16 +76,17 @@ struct ManageAccountsView: View {
         }
     }
 
-    /// 按搜索词和固定状态筛选账号。
+    /// 先按搜索词和固定状态筛选，再应用账号列表的统一排序规则。
     private var filteredAccounts: [CodexAccount] {
         let accounts = appState.state?.accounts ?? []
-        return accounts.filter { account in
+        let filtered = accounts.filter { account in
             let matchesSearch = searchText.isEmpty ||
                 [account.primaryLabel, account.secondaryLabel, account.accountKey]
                 .joined(separator: " ")
                 .localizedCaseInsensitiveContains(searchText)
             return matchesSearch && matchesFilter(account)
         }
+        return AccountOrdering.sorted(filtered, by: selectedSortOrder)
     }
 
     /// 将后端状态映射到可用、冷却、异常和已排除筛选。
@@ -129,10 +138,17 @@ struct ManageAccountsView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// 账号页工具栏只保留固定筛选、刷新和添加。
+    /// 账号页工具栏提供排序、固定筛选、刷新和添加。
     @ToolbarContentBuilder
     private var accountToolbar: some ToolbarContent {
         ToolbarItemGroup {
+            Picker("排序", selection: $selectedSortOrder) {
+                ForEach(AccountSortOrder.allCases) { order in
+                    Text(order.rawValue).tag(order)
+                }
+            }
+            .pickerStyle(.menu)
+
             Picker("状态", selection: $selectedFilter) {
                 ForEach(AccountStatusFilter.allCases) { filter in
                     Text(filter.rawValue).tag(filter)
@@ -191,7 +207,9 @@ private struct AccountDetailView: View {
                 actionFooter
             }
             .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { aliasText = account.alias ?? "" }
         .onChange(of: account.accountKey) { _ in aliasText = account.alias ?? "" }
         .onChange(of: account.alias ?? "") { aliasText = $0 }
@@ -292,15 +310,21 @@ private struct AccountDetailView: View {
     }
 }
 
-/// 添加和重新登录共用的轻量 sheet。
-private struct AccountLoginSheet: View {
-    @Environment(\.dismiss) private var dismiss
+/// 添加账号窗口和重新登录 sheet 共用的轻量表单。
+struct AccountLoginForm: View {
     let title: String
+    let onCancel: () -> Void
     let onConfirm: (String?) -> Void
     @State private var alias: String
 
-    init(title: String, initialAlias: String, onConfirm: @escaping (String?) -> Void) {
+    init(
+        title: String,
+        initialAlias: String,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping (String?) -> Void
+    ) {
         self.title = title
+        self.onCancel = onCancel
         self.onConfirm = onConfirm
         _alias = State(initialValue: initialAlias)
     }
@@ -313,17 +337,36 @@ private struct AccountLoginSheet: View {
                 .textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }
+                Button("取消", action: onCancel)
                 Button("继续登录") {
                     let value = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-                    dismiss()
                     onConfirm(value.isEmpty ? nil : value)
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
         .padding(24)
-        .frame(width: 380)
+        .frame(width: 420, height: 170)
+    }
+}
+
+/// 为管理页 sheet 适配共享登录表单的关闭行为。
+private struct AccountLoginSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let initialAlias: String
+    let onConfirm: (String?) -> Void
+
+    var body: some View {
+        AccountLoginForm(
+            title: title,
+            initialAlias: initialAlias,
+            onCancel: { dismiss() },
+            onConfirm: { alias in
+                dismiss()
+                onConfirm(alias)
+            }
+        )
     }
 }
 
@@ -350,6 +393,6 @@ private struct DeleteAccountSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 380)
+        .frame(width: 420, height: 170)
     }
 }

@@ -73,6 +73,37 @@ enum CodexAuthCLIError: LocalizedError, Equatable {
     }
 }
 
+/// 管理额度刷新代理的本地偏好键、地址校验与子进程环境映射。
+enum QuotaProxyConfiguration {
+    static let userDefaultsKey = "quotaProxyURL"
+    private static let supportedSchemes = ["http", "https", "socks5", "socks5h"]
+
+    /// 校验用户明确填写的代理地址，并生成 curl 同时兼容大小写变量的进程环境。
+    static func environment(proxyURL rawValue: String?) -> [String: String]? {
+        guard let rawValue else {
+            return nil
+        }
+        let proxyURL = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            !proxyURL.isEmpty,
+            let components = URLComponents(string: proxyURL),
+            let scheme = components.scheme?.lowercased(),
+            supportedSchemes.contains(scheme),
+            components.host?.isEmpty == false
+        else {
+            return nil
+        }
+        return [
+            "HTTP_PROXY": proxyURL,
+            "HTTPS_PROXY": proxyURL,
+            "ALL_PROXY": proxyURL,
+            "http_proxy": proxyURL,
+            "https_proxy": proxyURL,
+            "all_proxy": proxyURL,
+        ]
+    }
+}
+
 struct CodexAuthCLIClient: CodexAuthClientProtocol {
     private static let ghosttyAppURL = URL(fileURLWithPath: "/Applications/Ghostty.app")
 
@@ -83,6 +114,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     let cpaHealthChecker: CPAHealthChecking
     let cpaEventPoller: CPAEventPolling
     let terminalLaunchScriptWriter: TerminalLaunchScriptWriting
+    let quotaProxyURLProvider: () -> String?
 
     /// 注入进程、CPA 和临时脚本依赖，使智能启动在测试中不访问真实服务或认证配置。
     init(
@@ -92,7 +124,10 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         cpaConfigurationProvider: CPAConfigurationProviding = InstalledCPAConfigurationProvider(),
         cpaHealthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
         cpaEventPoller: CPAEventPolling = URLSessionCPAEventPoller(),
-        terminalLaunchScriptWriter: TerminalLaunchScriptWriting = TemporaryTerminalLaunchScriptWriter()
+        terminalLaunchScriptWriter: TerminalLaunchScriptWriting = TemporaryTerminalLaunchScriptWriter(),
+        quotaProxyURLProvider: @escaping () -> String? = {
+            UserDefaults.standard.string(forKey: QuotaProxyConfiguration.userDefaultsKey)
+        }
     ) {
         self.executableURL = executableURL
         self.runner = runner
@@ -101,6 +136,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         self.cpaHealthChecker = cpaHealthChecker
         self.cpaEventPoller = cpaEventPoller
         self.terminalLaunchScriptWriter = terminalLaunchScriptWriter
+        self.quotaProxyURLProvider = quotaProxyURLProvider
     }
 
     func loadState(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
@@ -126,7 +162,10 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     }
 
     func refresh(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
-        try await runStateCommand(["gui", "refresh"] + apiMode.arguments)
+        try await runStateCommand(
+            ["gui", "refresh"] + apiMode.arguments,
+            environment: QuotaProxyConfiguration.environment(proxyURL: quotaProxyURLProvider())
+        )
     }
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {
@@ -273,8 +312,15 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         return "\"\(escaped)\""
     }
 
-    private func runStateCommand(_ arguments: [String]) async throws -> CodexAuthState {
-        let result = try await runner.run(executableURL: executableURL, arguments: arguments)
+    private func runStateCommand(
+        _ arguments: [String],
+        environment: [String: String]? = nil
+    ) async throws -> CodexAuthState {
+        let result = try await runner.run(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment
+        )
         guard result.exitCode == 0 else {
             let stderr = String(data: result.standardError, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -13,6 +13,53 @@ final class CLIClientTests: XCTestCase {
         ])
     }
 
+    /// 验证额度刷新仅在用户配置有效代理后注入 curl 识别的环境变量。
+    func testClientInjectsConfiguredProxyOnlyForQuotaRefresh() async throws {
+        let output = #"{"schema_version":1,"codex_home":"/tmp/codex","active_account_key":null,"generated_at":"2026-06-29T12:00:00Z","refresh":{"attempted":true,"status":"ok","message":null},"warnings":[],"accounts":[]}"#
+        let runner = RecordingCommandRunner(output: output)
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner,
+            quotaProxyURLProvider: { "  http://127.0.0.1:7897  " }
+        )
+
+        _ = try await client.loadState(apiMode: .skipApi)
+        _ = try await client.refresh(apiMode: .forceApi)
+
+        XCTAssertNil(runner.calls[0].environment)
+        XCTAssertEqual(
+            runner.calls[1],
+            CommandCall(
+                executable: "/usr/local/bin/codex-auth",
+                arguments: ["gui", "refresh", "--api"],
+                environment: [
+                    "HTTP_PROXY": "http://127.0.0.1:7897",
+                    "HTTPS_PROXY": "http://127.0.0.1:7897",
+                    "ALL_PROXY": "http://127.0.0.1:7897",
+                    "http_proxy": "http://127.0.0.1:7897",
+                    "https_proxy": "http://127.0.0.1:7897",
+                    "all_proxy": "http://127.0.0.1:7897",
+                ]
+            )
+        )
+    }
+
+    /// 验证无效代理不会被传入认证请求子进程。
+    func testClientIgnoresInvalidQuotaProxy() async throws {
+        let output = #"{"schema_version":1,"codex_home":"/tmp/codex","active_account_key":null,"generated_at":"2026-06-29T12:00:00Z","refresh":{"attempted":true,"status":"ok","message":null},"warnings":[],"accounts":[]}"#
+        let runner = RecordingCommandRunner(output: output)
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner,
+            quotaProxyURLProvider: { "127.0.0.1:7897" }
+        )
+
+        _ = try await client.refresh(apiMode: .forceApi)
+
+        XCTAssertEqual(runner.calls.count, 1)
+        XCTAssertNil(runner.calls.first?.environment)
+    }
+
     /// 验证菜单全量刷新会把 `--full` 传递给 Token 扫描后端。
     func testClientBuildsFullTokenUsageCommand() async throws {
         let runner = RecordingCommandRunner(

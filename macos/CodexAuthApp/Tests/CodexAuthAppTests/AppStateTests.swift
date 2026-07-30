@@ -27,6 +27,26 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.notice, "已切换账号。新的 Codex CLI 会话将使用此账号。")
     }
 
+    /// 验证账号切换期间只阻止重复切换，不复用后台全量刷新状态。
+    func testAccountSwitchBusyStateCoalescesDuplicateRequests() async {
+        let state = CodexAuthState.empty(codexHome: "/tmp/codex")
+        let client = StubCodexAuthClient(state: state)
+        client.shouldDelaySwitch = true
+        let appState = AppState(client: client)
+
+        let first = Task { await appState.switchAccount(accountKey: "acct-1") }
+        await client.waitUntilSwitchStarted()
+        XCTAssertTrue(appState.isAccountSwitchInProgress)
+
+        let duplicate = Task { await appState.switchAccount(accountKey: "acct-2") }
+        await duplicate.value
+        XCTAssertEqual(client.switchCallCount, 1)
+
+        client.finishSwitch()
+        await first.value
+        XCTAssertFalse(appState.isAccountSwitchInProgress)
+    }
+
     func testDeleteRequiresConfirmation() {
         let appState = AppState(client: StubCodexAuthClient(state: .empty(codexHome: "/tmp/codex")))
         let account = CodexAccount.sample(accountKey: "acct-1", alias: "工作号", isActive: true)
@@ -200,6 +220,8 @@ final class AppStateTests: XCTestCase {
         await client.waitUntilRefreshStarted()
         let second = Task { await appState.refreshOnMenuOpen() }
         await Task.yield()
+        XCTAssertTrue(appState.isLoading)
+        XCTAssertFalse(appState.isAccountSwitchInProgress)
         client.finishRefresh()
         await first.value
         await second.value
@@ -412,6 +434,10 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var tokenUsageCallModes: [TokenUsageScanMode] = []
     var cpaSyncCalls: [CPAAccountSyncCall] = []
     var cpaEventBatch: CPAEventBatch = .empty
+    var shouldDelaySwitch = false
+    private var switchContinuation: CheckedContinuation<Void, Never>?
+    private var switchStartedContinuation: CheckedContinuation<Void, Never>?
+    private(set) var switchCallCount = 0
 
     init(state: CodexAuthState) {
         self.state = state
@@ -434,7 +460,31 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     }
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {
-        switchState ?? state
+        switchCallCount += 1
+        if shouldDelaySwitch {
+            await withCheckedContinuation { continuation in
+                switchContinuation = continuation
+                switchStartedContinuation?.resume()
+                switchStartedContinuation = nil
+            }
+        }
+        return switchState ?? state
+    }
+
+    /// 等待测试账号切换进入挂起状态，避免依赖固定延迟。
+    func waitUntilSwitchStarted() async {
+        if switchContinuation != nil {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            switchStartedContinuation = continuation
+        }
+    }
+
+    /// 恢复挂起的测试账号切换。
+    func finishSwitch() {
+        switchContinuation?.resume()
+        switchContinuation = nil
     }
 
     func removeAccount(accountKey: String) async throws -> CodexAuthState {

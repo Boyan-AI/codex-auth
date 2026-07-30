@@ -53,6 +53,10 @@ The initial export includes only ChatGPT accounts whose `smart_pool_enabled` val
 true. Later include/exclude actions call `gui cpa-sync` to copy or remove exactly one
 deterministically named CPA file. CPA and the direct path refresh their own copies
 after that explicit synchronization; they never share a writable auth file.
+Every exported OAuth file includes CPA's required `type: codex` provider discriminator.
+The desktop health check accepts CPA as connected only when the authenticated
+`/v1/models` response contains at least one model; an HTTP 200 with an empty catalog is
+treated as unavailable instead of allowing a terminal session that cannot be routed.
 
 CPA's primary repository documents localhost binding, management authentication, a dedicated authentication directory, usage statistics, quota behavior, round-robin routing, and session-sticky routing:
 

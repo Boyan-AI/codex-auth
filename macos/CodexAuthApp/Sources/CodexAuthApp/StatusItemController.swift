@@ -148,7 +148,12 @@ final class StatusItemController: NSObject, ObservableObject {
             return
         }
 
+        // 先隐藏独立管理窗口，避免激活 App 时把未关闭的功能窗口一并带到前台。
+        managementWindowController.hideForPopover()
+        // 菜单栏 App 可能仍处于非活动状态；先激活再显示，避免首个点击只用于唤醒窗口。
+        NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
         startOutsideClickMonitor()
         Task { @MainActor in
             await appState.refreshOnMenuOpen()

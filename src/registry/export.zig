@@ -176,5 +176,19 @@ fn exportCpaFile(allocator: std.mem.Allocator, src: []const u8, dest: []const u8
 
     const converted = try auth.convertStandardAuthJsonToCpa(allocator, data);
     defer allocator.free(converted);
-    try writeFile(dest, converted);
+    const payload = try addCpaProviderDiscriminator(allocator, converted);
+    defer allocator.free(payload);
+    try writeFile(dest, payload);
+}
+
+/// 在 CPA 专用导出边界写入文件认证所需的 Provider 标识，不修改标准认证快照。
+fn addCpaProviderDiscriminator(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    const trimmed = std.mem.trimStart(u8, data, &std.ascii.whitespace);
+    if (trimmed.len == 0 or trimmed[0] != '{') return error.InvalidCPAFormat;
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll("{\n  \"type\": \"codex\",");
+    try out.writer.writeAll(trimmed[1..]);
+    return try out.toOwnedSlice();
 }

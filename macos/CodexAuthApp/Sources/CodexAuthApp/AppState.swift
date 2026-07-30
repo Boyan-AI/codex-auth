@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     @Published private(set) var deletedAccounts: [DeletedAccountRecord]
     @Published private(set) var cpaConnectionStatus: CPAConnectionStatus = .unknown
     @Published private(set) var isLoading = false
+    @Published private(set) var isAccountSwitchInProgress = false
     @Published var errorMessage: String?
     @Published var notice: String?
     @Published var pendingDeleteAccount: CodexAccount?
@@ -138,6 +139,11 @@ final class AppState: ObservableObject {
     }
 
     func switchAccount(accountKey: String) async {
+        guard !isAccountSwitchInProgress else {
+            return
+        }
+        isAccountSwitchInProgress = true
+        defer { isAccountSwitchInProgress = false }
         await load {
             let state = try await client.switchAccount(accountKey: accountKey)
             notice = "已切换账号。新的 Codex CLI 会话将使用此账号。"

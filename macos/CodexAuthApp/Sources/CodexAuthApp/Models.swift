@@ -304,6 +304,40 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     }
 }
 
+/// 定义账号列表支持的稳定排序方式。
+enum AccountSortOrder: String, CaseIterable, Identifiable {
+    case added = "默认"
+    case quota = "额度"
+
+    var id: String { rawValue }
+}
+
+/// 集中处理菜单和管理页共用的账号排序规则。
+enum AccountOrdering {
+    /// 默认排序保持后端数组不变；额度按 7 天剩余百分比降序，未知值置后且同值保持原顺序。
+    static func sorted(_ accounts: [CodexAccount], by order: AccountSortOrder) -> [CodexAccount] {
+        guard order == .quota else {
+            return accounts
+        }
+
+        return accounts.enumerated().sorted { left, right in
+            let leftQuota = left.element.usage.sevenDay.remainingPercent
+            let rightQuota = right.element.usage.sevenDay.remainingPercent
+
+            switch (leftQuota, rightQuota) {
+            case let (leftValue?, rightValue?):
+                return leftValue == rightValue ? left.offset < right.offset : leftValue > rightValue
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return left.offset < right.offset
+            }
+        }.map(\.element)
+    }
+}
+
 struct UsageInfo: Decodable, Equatable {
     let fiveHour: UsageWindow?
     let sevenDay: UsageWindow

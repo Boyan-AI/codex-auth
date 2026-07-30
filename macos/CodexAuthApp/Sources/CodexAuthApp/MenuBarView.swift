@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 精简菜单栏主界面，仅保留智能启动、账号直连选择和高频入口。
@@ -6,11 +7,13 @@ struct MenuBarView: View {
     var closeMenu: @MainActor () -> Void = {}
     var openManagement: @MainActor (ManagementSection) -> Void = { _ in }
     @State private var isShowingTokenUsage = false
+    @State private var selectedSortOrder: AccountSortOrder = .added
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             header
             smartLaunch
+            accountControls
             accountList
             footer
             if let error = appState.errorMessage {
@@ -24,7 +27,7 @@ struct MenuBarView: View {
         .frame(width: 420)
     }
 
-    /// 顶部展示 CPA 短状态、今日消耗和明确的全量刷新入口。
+    /// 顶部只展示产品名和 CPA 短状态。
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -39,6 +42,42 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            Spacer()
+        }
+    }
+
+    /// 主按钮始终通过 CPA 启动官方 Codex CLI，不提供静默直连回退。
+    private var smartLaunch: some View {
+        VStack(spacing: 6) {
+            Button {
+                openCodexSessionAfterChoosingDirectory()
+            } label: {
+                Text("智能启动 Codex")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+
+            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个账号可用")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 将排序、今日消耗和全量刷新合并为一行高频控制。
+    private var accountControls: some View {
+        HStack(spacing: 10) {
+            Picker("排序", selection: $selectedSortOrder) {
+                ForEach(AccountSortOrder.allCases) { order in
+                    Text(order.rawValue).tag(order)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .fixedSize()
 
             Spacer()
 
@@ -63,26 +102,7 @@ struct MenuBarView: View {
         }
     }
 
-    /// 主按钮始终通过 CPA 启动官方 Codex CLI，不提供静默直连回退。
-    private var smartLaunch: some View {
-        VStack(spacing: 6) {
-            Button {
-                openCodexSessionAfterChoosingDirectory()
-            } label: {
-                Text("智能启动 Codex")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
-
-            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个账号可用")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// 当前直连账号优先，其余账号按可用、异常、已排除排序。
+    /// 提供默认和额度排序，并把可视高度控制在约四个账号。
     @ViewBuilder
     private var accountList: some View {
         if appState.isLoading && appState.state == nil {
@@ -99,8 +119,10 @@ struct MenuBarView: View {
                         AccountRow(account: account)
                     }
                 }
+                .background(ScrollIndicatorHider())
             }
-            .frame(maxHeight: 430)
+            .scrollIndicators(.hidden)
+            .frame(maxHeight: 350)
         }
     }
 
@@ -159,19 +181,7 @@ struct MenuBarView: View {
     }
 
     private var sortedAccounts: [CodexAccount] {
-        (appState.state?.accounts ?? []).sorted { left, right in
-            let leftRank = accountSortRank(left)
-            let rightRank = accountSortRank(right)
-            if leftRank != rightRank { return leftRank < rightRank }
-            return left.primaryLabel.localizedCaseInsensitiveCompare(right.primaryLabel) == .orderedAscending
-        }
-    }
-
-    /// 当前选择、可用、异常、已排除依次排序。
-    private func accountSortRank(_ account: CodexAccount) -> Int {
-        if account.isActive { return 0 }
-        if !account.participatesInSmartPool { return 3 }
-        return account.isAvailable ? 1 : 2
+        AccountOrdering.sorted(appState.state?.accounts ?? [], by: selectedSortOrder)
     }
 
     private var smartPoolAccountCount: Int {
@@ -192,5 +202,23 @@ struct MenuBarView: View {
                 Task { await appState.openNewCodexSession(at: directoryPath) }
             }
         ).run()
+    }
+}
+
+/// 从 SwiftUI 内容层定位底层 NSScrollView，覆盖系统“始终显示滚动条”偏好。
+private struct ScrollIndicatorHider: NSViewRepresentable {
+    /// 创建不参与布局和交互的探针视图。
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    /// 每次 SwiftUI 更新后重新关闭滚动条，避免系统偏好恢复 scroller。
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let scrollView = nsView.enclosingScrollView else { return }
+            scrollView.hasVerticalScroller = false
+            scrollView.verticalScroller?.isHidden = true
+            scrollView.autohidesScrollers = true
+        }
     }
 }
