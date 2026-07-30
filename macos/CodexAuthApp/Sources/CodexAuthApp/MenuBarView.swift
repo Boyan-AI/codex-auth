@@ -1,216 +1,188 @@
 import SwiftUI
 
+/// 精简菜单栏主界面，仅保留智能启动、账号直连选择和高频入口。
 struct MenuBarView: View {
     @EnvironmentObject private var appState: AppState
     var closeMenu: @MainActor () -> Void = {}
-    @State private var isManagingAccounts = false
-    @State private var isAddingAccount = false
-    @State private var newAccountAlias = ""
+    var openManagement: @MainActor (ManagementSection) -> Void = { _ in }
     @State private var isShowingTokenUsage = false
-    @State private var isShowingDeletedAccounts = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 11) {
             header
-            Divider()
+            smartLaunch
             accountList
-            Divider()
-            actions
-            if isAddingAccount {
-                addAccountPanel
-            }
-            if appState.pendingDeleteAccount != nil {
-                deleteConfirmationPanel
-            }
+            footer
             if let error = appState.errorMessage {
                 Text(error)
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
         .frame(width: 420)
-        .background {
-            MenuWindowOpenObserver {
-                Task {
-                    await appState.refreshOnMenuOpen()
-                }
-            }
-            .frame(width: 0, height: 0)
-        }
     }
 
+    /// 顶部展示 CPA 短状态、今日消耗和明确的全量刷新入口。
     private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Codex 账号")
-                    .font(.headline)
-                if let active = appState.state?.activeAccount {
-                    Text(active.primaryLabel)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                } else {
-                    Text("暂无活动账号")
-                        .font(.subheadline)
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Codex Auth")
+                    .font(.system(size: 20, weight: .semibold))
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(cpaStatusColor)
+                        .frame(width: 7, height: 7)
+                    Text(appState.cpaConnectionStatus.label)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            Spacer()
-            HStack(spacing: 8) {
-                Button {
-                    isShowingTokenUsage.toggle()
-                } label: {
-                    Label(
-                        "今日 \(appState.tokenUsage?.todayTotalText ?? "--")",
-                        systemImage: "chart.bar.xaxis"
-                    )
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .popover(isPresented: $isShowingTokenUsage, arrowEdge: .top) {
-                    TokenUsageView(info: appState.tokenUsage)
-                }
 
-                Button {
-                    Task { await appState.refreshUsage() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .help("刷新")
+            Spacer()
+
+            Button("今日 \(appState.tokenUsage?.todayTotalText ?? "--")") {
+                isShowingTokenUsage.toggle()
             }
+            .buttonStyle(.plain)
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.secondary)
+            .popover(isPresented: $isShowingTokenUsage, arrowEdge: .top) {
+                TokenUsageView(info: appState.tokenUsage, compact: true)
+            }
+
+            Button {
+                Task { await appState.refreshOnMenuOpen() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("全量刷新")
         }
     }
 
-    @ViewBuilder
-    private var accountList: some View {
-        if appState.isLoading && appState.state == nil {
-            ProgressView("正在加载账号...")
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let accounts = appState.state?.accounts, !accounts.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(accounts) { account in
-                    AccountRow(account: account, isManaging: isManagingAccounts)
-                }
+    /// 主按钮始终通过 CPA 启动官方 Codex CLI，不提供静默直连回退。
+    private var smartLaunch: some View {
+        VStack(spacing: 6) {
+            Button {
+                openCodexSessionAfterChoosingDirectory()
+            } label: {
+                Text("智能启动 Codex")
+                    .frame(maxWidth: .infinity)
             }
-        } else {
-            Text("没有已保存的账号")
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+
+            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个账号可用")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var actions: some View {
-        HStack(spacing: 6) {
-            Button {
-                withAnimation(.snappy) {
-                    isAddingAccount.toggle()
+    /// 当前直连账号优先，其余账号按可用、异常、已排除排序。
+    @ViewBuilder
+    private var accountList: some View {
+        if appState.isLoading && appState.state == nil {
+            ProgressView("正在加载账号…")
+                .frame(maxWidth: .infinity, minHeight: 120)
+        } else if sortedAccounts.isEmpty {
+            Text("没有已保存的账号")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 90)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(sortedAccounts) { account in
+                        AccountRow(account: account)
+                    }
                 }
-            } label: {
-                compactLabel("添加", systemImage: "plus.circle")
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxHeight: 430)
+        }
+    }
 
-            Button {
-                openCodexSessionAfterChoosingDirectory()
-            } label: {
-                compactLabel("会话", systemImage: "terminal")
-            }
-            .frame(maxWidth: .infinity)
-
-                Button {
-                    withAnimation(.snappy) {
-                        isManagingAccounts.toggle()
-                }
-            } label: {
-                Label(
-                    isManagingAccounts ? "完成" : "管理",
-                    systemImage: isManagingAccounts ? "checkmark.circle" : "slider.horizontal.3"
-                )
-                .labelStyle(.titleAndIcon)
-            }
-            .frame(maxWidth: .infinity)
-
-            Button {
-                isShowingDeletedAccounts.toggle()
-            } label: {
-                compactLabel("失效", systemImage: "archivebox")
-            }
-            .frame(maxWidth: .infinity)
-            .popover(isPresented: $isShowingDeletedAccounts, arrowEdge: .bottom) {
-                DeletedAccountsView(records: appState.deletedAccounts)
-            }
-
+    /// 底部只保留五个稳定入口，账号编辑和设置都在独立管理窗口中完成。
+    private var footer: some View {
+        HStack(spacing: 4) {
+            footerButton("账号", systemImage: "plus", section: .addAccount)
+            footerButton("管理", systemImage: "person.2", section: .accounts)
+            footerButton("统计", systemImage: "chart.bar", section: .usage)
+            footerButton("设置", systemImage: "gearshape", section: .settings)
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                compactLabel("退出", systemImage: "power")
+                footerLabel("退出", systemImage: "power")
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
+        .buttonStyle(.plain)
+        .padding(.top, 2)
     }
 
-    private func compactLabel(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .labelStyle(.titleAndIcon)
-            .font(.system(size: 13, weight: .semibold))
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
+    /// 构造打开统一管理窗口的底部按钮。
+    private func footerButton(_ title: String, systemImage: String, section: ManagementSection) -> some View {
+        Button {
+            closeMenu()
+            openManagement(section)
+        } label: {
+            footerLabel(title, systemImage: systemImage)
+        }
+        .frame(maxWidth: .infinity)
     }
 
-    private var addAccountPanel: some View {
-        HStack(spacing: 8) {
-            TextField("新账号别名（可选）", text: $newAccountAlias)
-                .textFieldStyle(.roundedBorder)
+    /// 统一底部入口的紧凑图标与文字样式。
+    private func footerLabel(_ title: String, systemImage: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .font(.callout)
+            Text(title)
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+    }
 
-            Button("登录") {
-                let alias = newAccountAlias.trimmingCharacters(in: .whitespacesAndNewlines)
-                newAccountAlias = ""
-                isAddingAccount = false
-                Task { await appState.login(alias: alias) }
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button("取消") {
-                newAccountAlias = ""
-                isAddingAccount = false
-            }
+    /// 根据连接状态映射菜单中的单点颜色。
+    private var cpaStatusColor: Color {
+        switch appState.cpaConnectionStatus {
+        case .connected:
+            return .orange
+        case .unavailable:
+            return .red
+        case .unknown, .notConfigured:
+            return .secondary
         }
     }
 
-    /// 在菜单窗口内确认删除，避免 macOS 菜单栏浮窗中的系统确认弹窗阻塞交互。
-    private var deleteConfirmationPanel: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("确定删除此账号？")
-                    .font(.footnote)
-                    .fontWeight(.semibold)
-                Text(appState.pendingDeleteAccount?.primaryLabel ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button("取消") {
-                appState.cancelDelete()
-            }
-            .disabled(appState.isLoading)
-
-            Button("删除", role: .destructive) {
-                Task { await appState.confirmDelete() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(appState.isLoading)
+    private var sortedAccounts: [CodexAccount] {
+        (appState.state?.accounts ?? []).sorted { left, right in
+            let leftRank = accountSortRank(left)
+            let rightRank = accountSortRank(right)
+            if leftRank != rightRank { return leftRank < rightRank }
+            return left.primaryLabel.localizedCaseInsensitiveCompare(right.primaryLabel) == .orderedAscending
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    /// 当前选择、可用、异常、已排除依次排序。
+    private func accountSortRank(_ account: CodexAccount) -> Int {
+        if account.isActive { return 0 }
+        if !account.participatesInSmartPool { return 3 }
+        return account.isAvailable ? 1 : 2
+    }
+
+    private var smartPoolAccountCount: Int {
+        (appState.state?.accounts ?? []).filter(\.participatesInSmartPool).count
+    }
+
+    private var availableSmartAccountCount: Int {
+        (appState.state?.accounts ?? []).filter { $0.participatesInSmartPool && $0.isAvailable }.count
+    }
+
+    /// 关闭菜单后选择目录，并把目录交给 CPA 智能启动流程。
     @MainActor
     private func openCodexSessionAfterChoosingDirectory() {
         CodexSessionMenuAction(

@@ -150,6 +150,82 @@ test "Scenario: Given gui refresh api flag when parsing then gui refresh options
     }
 }
 
+test "Scenario: Given gui stats full flag when parsing then full scan is requested" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "gui", "stats", "--full" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .stats => |stats_opts| try std.testing.expect(stats_opts.full),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given gui smart pool actions when parsing then membership is preserved" {
+    const gpa = std.testing.allocator;
+    const include_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "include" };
+    var include_result = try cli.commands.parseArgs(gpa, &include_args);
+    defer cli.commands.freeParseResult(gpa, &include_result);
+
+    switch (include_result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .smart_pool => |pool_opts| {
+                    try std.testing.expectEqualStrings("acct-key", pool_opts.account_key);
+                    try std.testing.expect(pool_opts.enabled);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    const exclude_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "exclude" };
+    var exclude_result = try cli.commands.parseArgs(gpa, &exclude_args);
+    defer cli.commands.freeParseResult(gpa, &exclude_result);
+
+    switch (exclude_result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .smart_pool => |pool_opts| try std.testing.expect(!pool_opts.enabled),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given gui cpa sync when parsing then account action and directory are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "gui", "cpa-sync", "acct-key", "exclude", "/tmp/cpa-auth" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .cpa_sync => |sync_opts| {
+                    try std.testing.expectEqualStrings("acct-key", sync_opts.account_key);
+                    try std.testing.expectEqualStrings("/tmp/cpa-auth", sync_opts.auth_dir);
+                    try std.testing.expect(!sync_opts.enabled);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given gui switch account key when parsing then key is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "gui", "switch", "acct-key" };
@@ -362,6 +438,34 @@ test "Scenario: Given export cpa without directory when parsing then cpa mode is
         },
         else => return error.TestExpectedEqual,
     }
+}
+
+test "Scenario: Given export cpa smart pool when parsing then filter is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "--smart-pool", "--cpa", "/tmp/cpa-auth" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .export_auth => |opts| {
+                try std.testing.expectEqual(cli.types.ExportFormat.cpa, opts.format);
+                try std.testing.expect(opts.smart_pool_only);
+                try std.testing.expectEqualStrings("/tmp/cpa-auth", opts.dest_path.?);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given export smart pool without cpa when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "--smart-pool" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .export_auth, "requires `--cpa`");
 }
 
 test "Scenario: Given import unknown short purge flag when parsing then usage error is returned" {

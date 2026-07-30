@@ -1,6 +1,13 @@
 import Combine
 import Foundation
 
+/// 定义刷新优先级：菜单全量刷新覆盖额度定时刷新，但保留期间到达的 Token 增量脏标记。
+private enum AppRefreshWork {
+    case full
+    case quota
+    case incrementalToken
+}
+
 @MainActor
 final class AppState: ObservableObject {
     nonisolated static let defaultPeriodicRefreshIntervalNanoseconds: UInt64 = 60_000_000_000
@@ -8,6 +15,7 @@ final class AppState: ObservableObject {
     @Published private(set) var state: CodexAuthState?
     @Published private(set) var tokenUsage: TokenUsageInfo?
     @Published private(set) var deletedAccounts: [DeletedAccountRecord]
+    @Published private(set) var cpaConnectionStatus: CPAConnectionStatus = .unknown
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var notice: String?
@@ -18,6 +26,13 @@ final class AppState: ObservableObject {
     private var usageAlertTracker = UsageAlertTracker()
     private var didRefreshOnAppLaunch = false
     private var periodicRefreshTask: Task<Void, Never>?
+    private var cpaEventPollingTask: Task<Void, Never>?
+    private var refreshLoopTask: Task<Void, Never>?
+    private var activeRefreshWork: AppRefreshWork?
+    private var pendingFullRefresh = false
+    private var pendingQuotaRefresh = false
+    private var pendingIncrementalTokenRefresh = false
+    private var tokenUsageGeneration = 0
     private var loadSequence = 0
 
     /// 注入状态客户端和低额度展示器，便于隔离系统通知并测试阈值行为。
@@ -32,6 +47,8 @@ final class AppState: ObservableObject {
 
     deinit {
         periodicRefreshTask?.cancel()
+        cpaEventPollingTask?.cancel()
+        refreshLoopTask?.cancel()
     }
 
     var isShowingDeleteConfirmation: Bool {
@@ -52,16 +69,12 @@ final class AppState: ObservableObject {
             return
         }
         didRefreshOnAppLaunch = true
-        await refreshUsage(apiMode: apiMode)
-        await loadTokenUsageData()
+        await requestRefresh(.full, apiMode: apiMode)
     }
 
+    /// 菜单每次打开都请求全量刷新；进行中的全量请求由协调器合并。
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
-        guard !isLoading else {
-            return
-        }
-        await refreshUsage(apiMode: apiMode)
-        await loadTokenUsageData()
+        await requestRefresh(.full, apiMode: apiMode)
     }
 
     func startPeriodicRefresh(
@@ -84,21 +97,44 @@ final class AppState: ObservableObject {
     }
 
     func refreshOnPeriodicTimer(apiMode: CodexAuthAPIMode = .automatic) async {
-        guard !isLoading else {
+        await requestRefresh(.quota, apiMode: apiMode)
+    }
+
+    /// 每 5 秒消费 CPA 请求事件；空队列和暂时不可达均不干扰菜单使用。
+    func startCPAEventPolling(intervalNanoseconds: UInt64 = 5_000_000_000) {
+        guard cpaEventPollingTask == nil else {
             return
         }
-        await refreshUsage(apiMode: apiMode)
-    }
-
-    func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
-        await load { try await client.refresh(apiMode: apiMode) }
-    }
-
-    func loadTokenUsageData() async {
-        do {
-            tokenUsage = try await client.loadTokenUsage()
-        } catch {
+        cpaEventPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: intervalNanoseconds)
+                if Task.isCancelled {
+                    break
+                }
+                await self?.pollCPAEventsOnce()
+            }
         }
+    }
+
+    /// 执行单次 CPA 事件轮询，便于测试刷新触发逻辑。
+    func pollCPAEventsOnce() async {
+        guard let batch = try? await client.pollCPAEvents(), batch.eventCount > 0 else {
+            return
+        }
+        await refreshOnCPAEvent(quotaExceeded: batch.quotaExceeded)
+    }
+
+    /// 手动额度刷新也进入同一写入队列，避免与菜单全量结果交叉覆盖。
+    func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
+        await requestRefresh(.quota, apiMode: apiMode)
+    }
+
+    /// CPA 请求事件标记增量 Token 扫描；429 额外触发权威额度刷新。
+    func refreshOnCPAEvent(quotaExceeded: Bool = false) async {
+        if quotaExceeded {
+            await requestRefresh(.quota, apiMode: .automatic)
+        }
+        await requestRefresh(.incrementalToken, apiMode: .automatic)
     }
 
     func switchAccount(accountKey: String) async {
@@ -127,20 +163,30 @@ final class AppState: ObservableObject {
             DeletedAccountStore.append(account)
             deletedAccounts = DeletedAccountStore.load()
             notice = "已删除账号。"
+            await synchronizeCPAAccount(accountKey: account.accountKey, enabled: false)
             return state
         }
     }
 
     func login(alias: String? = nil) async {
         await load {
-            let state = try await client.login()
+            let loggedInState = try await client.login()
             let trimmedAlias = alias?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmedAlias.isEmpty, let accountKey = state.activeAccountKey ?? state.activeAccount?.accountKey else {
+            let accountKey = loggedInState.activeAccountKey ?? loggedInState.activeAccount?.accountKey
+            guard !trimmedAlias.isEmpty else {
                 notice = "已添加账号。"
-                return state
+                if let accountKey {
+                    await synchronizeCPAAccount(accountKey: accountKey, enabled: true)
+                }
+                return loggedInState
+            }
+            guard let accountKey else {
+                notice = "已添加账号。"
+                return loggedInState
             }
             let renamedState = try await client.setAlias(accountKey: accountKey, alias: trimmedAlias)
             notice = "已添加账号并设置别名。"
+            await synchronizeCPAAccount(accountKey: accountKey, enabled: true)
             return renamedState
         }
     }
@@ -169,12 +215,146 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 更新账号的智能池成员状态，并保留当前直连选择不变。
+    func setSmartPoolEnabled(accountKey: String, enabled: Bool) async {
+        await load {
+            let state = try await client.setSmartPoolEnabled(accountKey: accountKey, enabled: enabled)
+            notice = enabled ? "已加入智能路由。" : "已从智能路由排除。"
+            await synchronizeCPAAccount(accountKey: accountKey, enabled: enabled)
+            return state
+        }
+    }
+
     func openNewCodexSession(at directoryPath: String) async {
+        errorMessage = nil
         do {
             try await client.openNewCodexSession(at: directoryPath)
-            notice = "已打开 Codex，会恢复最近会话或创建新会话。"
+            cpaConnectionStatus = .connected
         } catch {
+            if error as? CPARuntimeError == .missingAPIKey {
+                cpaConnectionStatus = .notConfigured
+            } else {
+                cpaConnectionStatus = .unavailable
+            }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 仅检查 CPA 连接状态，不触发账号额度或 Token 全量刷新。
+    func refreshCPAConnection() async {
+        cpaConnectionStatus = await client.checkCPAConnection()
+    }
+
+    /// 合并刷新请求并等待当前刷新循环处理完所有必要的后续工作。
+    private func requestRefresh(_ work: AppRefreshWork, apiMode: CodexAuthAPIMode) async {
+        switch work {
+        case .full:
+            if activeRefreshWork != .full {
+                pendingFullRefresh = true
+            }
+        case .quota:
+            if activeRefreshWork != .full && activeRefreshWork != .quota && !pendingFullRefresh {
+                pendingQuotaRefresh = true
+            }
+        case .incrementalToken:
+            if activeRefreshWork != .incrementalToken {
+                pendingIncrementalTokenRefresh = true
+            }
+        }
+
+        if refreshLoopTask == nil {
+            refreshLoopTask = Task { [weak self] in
+                await self?.runRefreshLoop(apiMode: apiMode)
+            }
+        }
+        await refreshLoopTask?.value
+    }
+
+    /// 以全量、额度、增量的优先级串行执行；全量期间的新增量请求最多补跑一次。
+    private func runRefreshLoop(apiMode: CodexAuthAPIMode) async {
+        isLoading = true
+        defer {
+            activeRefreshWork = nil
+            refreshLoopTask = nil
+            isLoading = false
+        }
+
+        while !Task.isCancelled {
+            if pendingFullRefresh {
+                pendingFullRefresh = false
+                pendingQuotaRefresh = false
+                pendingIncrementalTokenRefresh = false
+                activeRefreshWork = .full
+                await performFullRefresh(apiMode: apiMode)
+                activeRefreshWork = nil
+                continue
+            }
+            if pendingQuotaRefresh {
+                pendingQuotaRefresh = false
+                activeRefreshWork = .quota
+                await performQuotaRefresh(apiMode: apiMode)
+                activeRefreshWork = nil
+                continue
+            }
+            if pendingIncrementalTokenRefresh {
+                pendingIncrementalTokenRefresh = false
+                activeRefreshWork = .incrementalToken
+                await performTokenRefresh(mode: .incremental)
+                activeRefreshWork = nil
+                continue
+            }
+            break
+        }
+    }
+
+    /// 顺序提交额度和全量 Token 结果，使用现有序列号阻止旧额度覆盖账号操作。
+    private func performFullRefresh(apiMode: CodexAuthAPIMode) async {
+        loadSequence += 1
+        let sequence = loadSequence
+        errorMessage = nil
+        do {
+            let loadedState = try await client.refresh(apiMode: apiMode)
+            if sequence == loadSequence {
+                state = loadedState
+                presentUsageAlerts(for: loadedState)
+            }
+        } catch {
+            if sequence == loadSequence {
+                errorMessage = error.localizedDescription
+            }
+        }
+        await performTokenRefresh(mode: .full)
+        cpaConnectionStatus = await client.checkCPAConnection()
+    }
+
+    /// 仅刷新权威额度数据，并沿用序列号保护账号切换结果。
+    private func performQuotaRefresh(apiMode: CodexAuthAPIMode) async {
+        loadSequence += 1
+        let sequence = loadSequence
+        errorMessage = nil
+        do {
+            let loadedState = try await client.refresh(apiMode: apiMode)
+            if sequence == loadSequence {
+                state = loadedState
+                presentUsageAlerts(for: loadedState)
+            }
+        } catch {
+            if sequence == loadSequence {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 仅接受最新一代 Token 扫描结果，失败时保留上一次成功值。
+    private func performTokenRefresh(mode: TokenUsageScanMode) async {
+        tokenUsageGeneration += 1
+        let generation = tokenUsageGeneration
+        do {
+            let loadedUsage = try await client.loadTokenUsage(mode: mode)
+            if generation == tokenUsageGeneration {
+                tokenUsage = loadedUsage
+            }
+        } catch {
         }
     }
 
@@ -206,6 +386,15 @@ final class AppState: ObservableObject {
     private func presentUsageAlerts(for state: CodexAuthState) {
         for alert in usageAlertTracker.alerts(for: state.activeAccount) {
             usageAlertPresenter.present(alert)
+        }
+    }
+
+    /// CPA 同步失败不回滚已保存的成员状态，只展示可恢复的告警。
+    private func synchronizeCPAAccount(accountKey: String, enabled: Bool) async {
+        do {
+            try await client.syncCPAAccount(accountKey: accountKey, enabled: enabled)
+        } catch {
+            errorMessage = "智能池设置已保存，但 CPA 凭据同步失败：\(error.localizedDescription)"
         }
     }
 }

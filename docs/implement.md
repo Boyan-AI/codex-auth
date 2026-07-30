@@ -9,6 +9,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 - File permissions: [docs/permissions.md](./permissions.md)
 - Schema migration: [docs/schema-migration.md](./schema-migration.md)
 - Test organization: [docs/tests.md](./tests.md)
+- CPA smart routing: [docs/cpa-smart-routing.md](./cpa-smart-routing.md)
 - Release and CI: [docs/release.md](./release.md)
 
 ## Runtime State
@@ -23,6 +24,7 @@ Managed files:
 
 - `<codex_home>/auth.json`
 - `<codex_home>/accounts/registry.json`
+- `<codex_home>/accounts/token-usage-cache.json`
 - `<codex_home>/accounts/<account file key>.auth.json`
 - `<codex_home>/accounts/backup/`
 - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
@@ -116,6 +118,30 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Rate limits map `window_minutes = 300` to 5h and `window_minutes = 10080` to weekly.
 - Past reset timestamps render as `100%`.
 
+Token totals use a separate per-rollout contribution cache. Incremental scans reuse a
+file only when its path, size, and nanosecond modification time still match. Full
+scans ignore existing entries and rewrite the cache. The cache contains aggregate
+counts only, is stored with private permissions, and can be deleted safely because a
+later scan rebuilds it from rollout files.
+
+## Desktop Refresh Coordination
+
+- App launch and each menu opening request a full quota, reset-credit, and Token refresh.
+- Repeated full requests are coalesced by one in-process writer.
+- Periodic refresh updates quota data without rescanning every Token file.
+- Incremental Token requests arriving during a full scan are collapsed into one follow-up pass.
+- Generation and state sequence counters prevent stale async results from replacing newer account or Token state.
+
+The CPA event adapter consumes the authenticated usage queue from the pinned managed
+runtime every five seconds. It only forwards event presence and HTTP 429 state to the
+existing coordinator; Token totals remain derived from local rollout files.
+
+The managed CPA runtime lives under
+`~/Library/Application Support/Codex Auth/CPA`. Its `auth/` directory contains copied
+CPA-format account files and is never used as the direct Codex home. Smart-pool changes
+persist registry metadata first, then call `gui cpa-sync` for one account. A copy failure
+is reported without rolling back the saved membership value.
+
 
 ## Display Model
 
@@ -128,3 +154,8 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - `LAST ACTIVITY` is rendered as relative time from `last_usage_at`.
 
 Command-specific display behavior lives in the relevant file under [docs/commands/](./commands/).
+
+The macOS menu uses a flat status-sorted account list rather than the CLI's grouped
+table. It keeps one 420-point popover for frequent actions and one reusable management
+window for accounts, routing, statistics, and settings. Selecting a row changes only
+the next direct Codex CLI session; smart-pool membership is a separate account setting.

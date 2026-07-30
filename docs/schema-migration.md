@@ -12,16 +12,16 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
-  - current `schema_version = 4`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 4`.
+  - current `schema_version = 5`
+- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 5`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- In the current code, supported automatic migration is `version = 2 -> schema_version = 4`; older current-layout schema `3` files are rewritten once as schema `4`.
-- Current-layout schema `4` files are also rewritten once when they are missing normalized current fields such as `previous_active_account_key`.
+- In the current code, supported automatic migration is `version = 2 -> schema_version = 5`; older current-layout schema `3` and `4` files are rewritten once as schema `5`.
+- Current-layout schema `5` files are also rewritten once when they are missing normalized fields such as `previous_active_account_key` or per-account `smart_pool_enabled`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Released Schemas
@@ -43,6 +43,10 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Live refresh interval stored as top-level `interval_seconds`
   - Older `live.interval_seconds` and removed `auto_switch` blocks are omitted on rewrite
   - Adds top-level `previous_active_account_key` for `codex-auth -` and `codex-auth switch -`
+- `schema_version = 5`
+  - Adds per-account `smart_pool_enabled`
+  - Missing values from schema `2` through `4` default to `true`, so existing accounts join the smart routing pool automatically
+  - Does not change account snapshot filenames or authentication payloads
 
 ## When To Bump `schema_version`
 

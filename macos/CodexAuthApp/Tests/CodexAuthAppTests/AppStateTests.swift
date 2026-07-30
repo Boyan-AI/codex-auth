@@ -117,14 +117,55 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.notice, "已更新别名。")
     }
 
-    func testOpenCodexSessionUsesDirectoryAndChineseMessage() async {
+    /// 验证管理页智能池开关更新状态，但不改变官方 CLI 的当前直连账号。
+    func testSetSmartPoolEnabledUpdatesStateAndMessage() async {
+        let initialAccount = CodexAccount.sample(accountKey: "acct-1", alias: "工作号", isActive: true)
+        let excludedAccount = CodexAccount(
+            accountKey: initialAccount.accountKey,
+            displayName: initialAccount.displayName,
+            alias: initialAccount.alias,
+            email: initialAccount.email,
+            accountName: initialAccount.accountName,
+            plan: initialAccount.plan,
+            authMode: initialAccount.authMode,
+            smartPoolEnabled: false,
+            isActive: true,
+            usage: initialAccount.usage,
+            lastUsageAt: initialAccount.lastUsageAt,
+            lastRefreshAt: initialAccount.lastRefreshAt
+        )
+        let excludedState = CodexAuthState(
+            schemaVersion: 1,
+            codexHome: "/tmp/codex",
+            activeAccountKey: "acct-1",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            refresh: RefreshInfo(attempted: false, status: "skipped", message: nil),
+            warnings: [],
+            accounts: [excludedAccount]
+        )
+        let client = StubCodexAuthClient(state: excludedState)
+        client.smartPoolState = excludedState
+        let appState = AppState(client: client)
+
+        await appState.setSmartPoolEnabled(accountKey: "acct-1", enabled: false)
+
+        XCTAssertEqual(client.smartPoolAccountKey, "acct-1")
+        XCTAssertEqual(client.smartPoolEnabled, false)
+        XCTAssertEqual(appState.state?.activeAccountKey, "acct-1")
+        XCTAssertFalse(appState.state?.activeAccount?.participatesInSmartPool ?? true)
+        XCTAssertEqual(appState.notice, "已从智能路由排除。")
+        XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-1", enabled: false)])
+    }
+
+    func testOpenCodexSessionUsesDirectoryWithoutPersistentOpenedMessage() async {
         let client = StubCodexAuthClient(state: .empty(codexHome: "/tmp/codex"))
         let appState = AppState(client: client)
 
         await appState.openNewCodexSession(at: "/Users/me/project")
 
         XCTAssertEqual(client.openedSessionDirectoryPath, "/Users/me/project")
-        XCTAssertEqual(appState.notice, "已打开 Codex，会恢复最近会话或创建新会话。")
+        XCTAssertNil(appState.notice)
+        XCTAssertEqual(appState.cpaConnectionStatus, .connected)
     }
 
     func testRefreshOnAppLaunchRunsUsageRefreshOnlyOnce() async {
@@ -147,6 +188,66 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(client.refreshCallCount, 2)
         XCTAssertEqual(client.loadStateCallCount, 0)
+    }
+
+    /// 验证同一轮进行中的菜单全量刷新会被合并，而不是重复请求额度接口。
+    func testConcurrentMenuOpenFullRefreshesAreCoalesced() async {
+        let state = CodexAuthState.empty(codexHome: "/tmp/codex")
+        let client = DelayedRefreshCodexAuthClient(refreshState: state, switchState: state)
+        let appState = AppState(client: client)
+
+        let first = Task { await appState.refreshOnMenuOpen() }
+        await client.waitUntilRefreshStarted()
+        let second = Task { await appState.refreshOnMenuOpen() }
+        await Task.yield()
+        client.finishRefresh()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.tokenUsageCallModes, [.full])
+    }
+
+    /// 验证全量刷新期间到达的 CPA 事件会在全量完成后合并成一次增量补扫。
+    func testCPAEventDuringFullRefreshRunsOneIncrementalFollowUp() async {
+        let state = CodexAuthState.empty(codexHome: "/tmp/codex")
+        let client = DelayedRefreshCodexAuthClient(refreshState: state, switchState: state)
+        let appState = AppState(client: client)
+
+        let full = Task { await appState.refreshOnMenuOpen() }
+        await client.waitUntilRefreshStarted()
+        let firstEvent = Task { await appState.refreshOnCPAEvent() }
+        let secondEvent = Task { await appState.refreshOnCPAEvent() }
+        await Task.yield()
+        client.finishRefresh()
+        await full.value
+        await firstEvent.value
+        await secondEvent.value
+
+        XCTAssertEqual(client.tokenUsageCallModes, [.full, .incremental])
+    }
+
+    /// 验证 CPA 429 事件先刷新权威额度，再执行本地 Token 增量扫描。
+    func testCPAQuotaEventRefreshesQuotaAndIncrementalTokens() async {
+        let client = StubCodexAuthClient(state: .empty(codexHome: "/tmp/codex"))
+        let appState = AppState(client: client)
+
+        await appState.refreshOnCPAEvent(quotaExceeded: true)
+
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.tokenUsageCallModes, [.incremental])
+    }
+
+    /// 验证管理队列轮询结果会复用现有串行刷新协调器。
+    func testPollCPAEventsOnceTriggersQuotaAndIncrementalRefresh() async {
+        let client = StubCodexAuthClient(state: .empty(codexHome: "/tmp/codex"))
+        client.cpaEventBatch = CPAEventBatch(eventCount: 1, quotaExceeded: true)
+        let appState = AppState(client: client)
+
+        await appState.pollCPAEventsOnce()
+
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.tokenUsageCallModes, [.incremental])
     }
 
     func testPeriodicRefreshTickRunsUsageRefresh() async {
@@ -278,6 +379,7 @@ private func makeUsageState(
         accountName: nil,
         plan: "pro",
         authMode: "chatgpt",
+        smartPoolEnabled: true,
         isActive: true,
         usage: UsageInfo(fiveHour: nil, sevenDay: resolvedSevenDay),
         lastUsageAt: nil,
@@ -299,11 +401,17 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var switchState: CodexAuthState?
     var loginState: CodexAuthState?
     var aliasState: CodexAuthState?
+    var smartPoolState: CodexAuthState?
     var openedSessionDirectoryPath: String?
     var setAliasAccountKey: String?
     var setAliasValue: String?
+    var smartPoolAccountKey: String?
+    var smartPoolEnabled: Bool?
     var loadStateCallCount = 0
     var refreshCallCount = 0
+    var tokenUsageCallModes: [TokenUsageScanMode] = []
+    var cpaSyncCalls: [CPAAccountSyncCall] = []
+    var cpaEventBatch: CPAEventBatch = .empty
 
     init(state: CodexAuthState) {
         self.state = state
@@ -312,6 +420,12 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
         loadStateCallCount += 1
         return state
+    }
+
+    /// 记录 Token 扫描模式，并使用明确错误让测试保留空统计状态。
+    func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
+        tokenUsageCallModes.append(mode)
+        throw CodexAuthCLIError.commandFailed("Token usage is unavailable")
     }
 
     func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
@@ -337,6 +451,23 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
         state
     }
 
+    /// 记录智能池开关参数并返回指定状态。
+    func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState {
+        smartPoolAccountKey = accountKey
+        smartPoolEnabled = enabled
+        return smartPoolState ?? state
+    }
+
+    /// 记录 AppState 发出的 CPA 凭据同步请求。
+    func syncCPAAccount(accountKey: String, enabled: Bool) async throws {
+        cpaSyncCalls.append(CPAAccountSyncCall(accountKey: accountKey, enabled: enabled))
+    }
+
+    /// 返回预置事件批次，验证轮询与刷新协调器的衔接。
+    func pollCPAEvents() async throws -> CPAEventBatch {
+        cpaEventBatch
+    }
+
     func login() async throws -> CodexAuthState {
         loginState ?? state
     }
@@ -350,12 +481,20 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     }
 }
 
+/// 表示测试客户端收到的一次 CPA 成员同步调用。
+struct CPAAccountSyncCall: Equatable {
+    let accountKey: String
+    let enabled: Bool
+}
+
 @MainActor
 final class DelayedRefreshCodexAuthClient: CodexAuthClientProtocol {
     let refreshState: CodexAuthState
     let switchState: CodexAuthState
     private var refreshContinuation: CheckedContinuation<Void, Never>?
     private var refreshStartedContinuation: CheckedContinuation<Void, Never>?
+    private(set) var refreshCallCount = 0
+    private(set) var tokenUsageCallModes: [TokenUsageScanMode] = []
 
     init(refreshState: CodexAuthState, switchState: CodexAuthState) {
         self.refreshState = refreshState
@@ -381,12 +520,19 @@ final class DelayedRefreshCodexAuthClient: CodexAuthClientProtocol {
     }
 
     func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
+        refreshCallCount += 1
         await withCheckedContinuation { continuation in
             refreshContinuation = continuation
             refreshStartedContinuation?.resume()
             refreshStartedContinuation = nil
         }
         return refreshState
+    }
+
+    /// 记录协调器选择的全量或增量模式，不访问真实 rollout 文件。
+    func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
+        tokenUsageCallModes.append(mode)
+        throw CodexAuthCLIError.commandFailed("Token usage is unavailable")
     }
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {

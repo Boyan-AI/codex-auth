@@ -28,6 +28,7 @@ final class ModelsTests: XCTestCase {
               "account_name": "Workspace",
               "plan": "pro",
               "auth_mode": "chatgpt",
+              "smart_pool_enabled": false,
               "is_active": true,
               "usage": {
                 "five_hour": {
@@ -59,10 +60,44 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(state.accounts[0].primaryLabel, "工作号")
         XCTAssertEqual(state.accounts[0].secondaryLabel, "me***@example.com")
         XCTAssertEqual(state.accounts[0].planLabel, "Pro")
+        XCTAssertFalse(state.accounts[0].participatesInSmartPool)
         XCTAssertEqual(state.accounts[0].fiveHourUsageText, "99%（6月30日 01:00刷新）")
         XCTAssertEqual(state.accounts[0].sevenDayUsageText, "100%（7月6日 20:00刷新）")
         XCTAssertEqual(state.resetCredits?.availableCount, 2)
         XCTAssertEqual(state.resetCredits?.menuBarText, "重置 2次 · 7月30日 08:00")
+    }
+
+    /// 验证旧 GUI 输出缺少智能池字段时仍默认加入，兼容 schema 5 之前的版本。
+    func testMissingSmartPoolFieldDefaultsToIncluded() throws {
+        let json = """
+        {
+          "account_key": "acct-legacy",
+          "display_name": "Legacy",
+          "alias": null,
+          "email": null,
+          "account_name": null,
+          "plan": "plus",
+          "auth_mode": "chatgpt",
+          "is_active": false,
+          "usage": {
+            "five_hour": null,
+            "seven_day": {
+              "status": "ok",
+              "remaining_percent": 88,
+              "total": 100,
+              "used": 12,
+              "reset_at": null
+            }
+          },
+          "last_usage_at": null,
+          "last_refresh_at": null
+        }
+        """.data(using: .utf8)!
+
+        let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: json)
+
+        XCTAssertTrue(account.participatesInSmartPool)
+        XCTAssertTrue(account.isAvailable)
     }
 
     func testAccountLabelsUseMaskedEmailWhenAliasIsMissing() {
@@ -74,6 +109,7 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: false,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 88, total: 100, used: 12, resetAt: nil),
@@ -128,6 +164,7 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 99, total: 100, used: 1, resetAt: nil),
@@ -191,6 +228,7 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 99, total: 100, used: 1, resetAt: nil),
@@ -217,6 +255,7 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: nil,
@@ -250,7 +289,7 @@ final class ModelsTests: XCTestCase {
 
         XCTAssertEqual(presentation.plainText, "100%")
         XCTAssertEqual(presentation.segments.last?.tone, .available)
-        XCTAssertEqual(resetCredits.accountDetailText, "重置: 1次  7月3日 10:40")
+        XCTAssertEqual(resetCredits.accountDetailText, "重置 1次 · 最近到期 7月3日 10:40")
     }
 
     /// 验证单行额度在菜单栏高度内垂直居中，避免文字在移除 5 小时窗口后上移。
@@ -273,6 +312,7 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 90, total: 100, used: 10, resetAt: nil),

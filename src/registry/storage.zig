@@ -383,7 +383,28 @@ fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
         return true;
     }
     if (root_obj.get("previous_active_account_key") == null) return true;
+    if (accountsNeedSmartPoolRewrite(root_obj)) return true;
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
+}
+
+/// 检查当前布局中的账号是否缺少 schema 5 的智能池字段或使用了错误类型。
+fn accountsNeedSmartPoolRewrite(root_obj: std.json.ObjectMap) bool {
+    const accounts = switch (root_obj.get("accounts") orelse return false) {
+        .array => |items| items,
+        else => return false,
+    };
+    for (accounts.items) |item| {
+        const account = switch (item) {
+            .object => |value| value,
+            else => continue,
+        };
+        const enabled = account.get("smart_pool_enabled") orelse return true;
+        switch (enabled) {
+            .bool => {},
+            else => return true,
+        }
+    }
+    return false;
 }
 
 fn parseRegistryLiveConfig(live: *LiveConfig, root_obj: std.json.ObjectMap) void {
@@ -453,7 +474,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3, 4 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4, 5 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",

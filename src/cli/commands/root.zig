@@ -96,6 +96,11 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
         .gui => |opts| switch (opts) {
             .switch_account => |account_key| allocator.free(account_key),
             .remove_account => |account_key| allocator.free(account_key),
+            .smart_pool => |pool_opts| allocator.free(pool_opts.account_key),
+            .cpa_sync => |sync_opts| {
+                allocator.free(sync_opts.account_key);
+                allocator.free(sync_opts.auth_dir);
+            },
             .import_auth => |import_opts| {
                 allocator.free(import_opts.auth_path);
                 if (import_opts.alias) |alias_value| allocator.free(alias_value);

@@ -78,3 +78,21 @@ rg 'test_api|src/testing|testing\.fixtures' src tests
 ```
 
 The first command should return no source inline tests. The second command should return no `test_api` or production fixture exports.
+
+## Desktop App Validation
+
+Run Swift validation with an isolated home and scratch directory:
+
+```sh
+HOME=/tmp/<task-name> swift test \
+  --package-path /path/to/repo/macos/CodexAuthApp \
+  --scratch-path /tmp/<task-name>/swift
+```
+
+The CPA smart-routing suite covers localhost-only configuration, missing keys,
+invocation-scoped provider overrides, terminal secret isolation, smart-pool commands,
+installed client configuration, per-account CPA synchronization, management queue
+decoding, 429-triggered refresh, schema-compatible decoding, and refresh coalescing.
+`tests/token_usage_test.zig`
+owns the full-to-incremental cache regression so production files remain free of
+inline tests.

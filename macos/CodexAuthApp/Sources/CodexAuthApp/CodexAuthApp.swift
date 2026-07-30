@@ -13,6 +13,7 @@ struct CodexAuthMenuApp: App {
         Task { @MainActor in
             appState.prepareUsageAlerts()
             appState.startPeriodicRefresh()
+            appState.startCPAEventPolling()
             await appState.refreshOnAppLaunch()
         }
     }

@@ -1,11 +1,16 @@
 const std = @import("std");
 const app_runtime = @import("core/runtime.zig");
+const compat_fs = @import("core/compat_fs.zig");
 const registry = @import("registry/root.zig");
 const c_time = @cImport({
     @cInclude("time.h");
 });
 
 const max_rollout_bytes: usize = 64 * 1024 * 1024;
+const max_cache_bytes: usize = 16 * 1024 * 1024;
+const cache_schema_version: u32 = 1;
+
+const ScanMode = enum { incremental, full };
 
 const UsageTotals = struct {
     input_tokens: i64 = 0,
@@ -49,6 +54,26 @@ const DayUsage = struct {
     }
 };
 
+/// 保存单个 rollout 文件的独立贡献，使变更文件可以单独重算并安全替换。
+const FileReport = struct {
+    path: []u8,
+    size: u64,
+    mtime_ns: i128,
+    totals: UsageTotals = .{},
+    days: std.ArrayList(DayUsage) = .empty,
+    has_usage: bool = false,
+    repeated_snapshots: usize = 0,
+    segmented_sessions: usize = 0,
+    parse_errors: usize = 0,
+
+    /// 释放缓存条目的路径与日期所有权。
+    fn deinit(self: *FileReport, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        for (self.days.items) |*day| day.deinit(allocator);
+        self.days.deinit(allocator);
+    }
+};
+
 const TokenUsageJson = struct {
     input_tokens: ?i64 = null,
     cached_input_tokens: ?i64 = null,
@@ -70,6 +95,29 @@ const TokenLineJson = struct {
     timestamp: []const u8 = "",
     type: []const u8 = "",
     payload: TokenPayloadJson = .{},
+};
+
+const CachedDayJson = struct {
+    date: []const u8,
+    totals: UsageTotals,
+    sessions: usize,
+};
+
+const CachedFileJson = struct {
+    path: []const u8,
+    size: u64,
+    mtime_ns: i128,
+    totals: UsageTotals,
+    days: []const CachedDayJson,
+    has_usage: bool,
+    repeated_snapshots: usize,
+    segmented_sessions: usize,
+    parse_errors: usize,
+};
+
+const CacheDocumentJson = struct {
+    schema_version: u32,
+    files: []const CachedFileJson,
 };
 
 pub const Report = struct {
@@ -179,28 +227,60 @@ fn writeDay(out: *std.Io.Writer, day: DayUsage) !void {
     try out.writeAll("}");
 }
 
-/// 扫描 Codex rollout 文件，并通过累计 token 快照差分恢复真实增量。
+/// 增量扫描 Codex rollout 文件，仅重新解析签名发生变化的文件。
 pub fn scan(allocator: std.mem.Allocator, codex_home: []const u8) !Report {
+    return scanWithMode(allocator, codex_home, .incremental);
+}
+
+/// 强制重新解析所有 rollout 文件，并刷新增量缓存。
+pub fn scanFull(allocator: std.mem.Allocator, codex_home: []const u8) !Report {
+    return scanWithMode(allocator, codex_home, .full);
+}
+
+/// 按扫描模式合并每个文件的独立贡献，并在成功后写回缓存。
+fn scanWithMode(allocator: std.mem.Allocator, codex_home: []const u8, mode: ScanMode) !Report {
     var report: Report = .{};
     errdefer report.deinit(allocator);
+    var cached_files = if (mode == .incremental)
+        loadCache(allocator, codex_home) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => std.ArrayList(FileReport).empty,
+        }
+    else
+        std.ArrayList(FileReport).empty;
+    defer deinitFileReports(allocator, &cached_files);
+    var updated_files = std.ArrayList(FileReport).empty;
+    defer deinitFileReports(allocator, &updated_files);
 
     const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
     defer allocator.free(sessions_root);
-    scanRoot(allocator, sessions_root, &report) catch |err| switch (err) {
+    scanRoot(allocator, sessions_root, cached_files.items, mode, &updated_files, &report) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => {},
         else => return err,
     };
 
     const archived_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "archived_sessions" });
     defer allocator.free(archived_root);
-    scanRoot(allocator, archived_root, &report) catch |err| switch (err) {
+    scanRoot(allocator, archived_root, cached_files.items, mode, &updated_files, &report) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => {},
         else => return err,
+    };
+    saveCache(allocator, codex_home, updated_files.items) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {},
     };
     return report;
 }
 
-fn scanRoot(allocator: std.mem.Allocator, root: []const u8, report: *Report) !void {
+/// 扫描一个会话根目录，复用未变化文件的缓存贡献。
+fn scanRoot(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    cached_files: []const FileReport,
+    mode: ScanMode,
+    updated_files: *std.ArrayList(FileReport),
+    report: *Report,
+) !void {
     var dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), root, .{ .iterate = true });
     defer dir.close(app_runtime.io());
     var walker = try dir.walk(allocator);
@@ -211,18 +291,37 @@ fn scanRoot(allocator: std.mem.Allocator, root: []const u8, report: *Report) !vo
         const path = try std.fs.path.join(allocator, &[_][]const u8{ root, entry.path });
         defer allocator.free(path);
         report.files_scanned += 1;
-        try scanFile(allocator, path, report);
+        const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        var file_report = if (mode == .incremental) blk: {
+            if (findCachedFile(cached_files, path, stat.size, stat.mtime.nanoseconds)) |cached| {
+                break :blk try cloneFileReport(allocator, cached);
+            }
+            break :blk try scanFile(allocator, path, stat.size, stat.mtime.nanoseconds);
+        } else try scanFile(allocator, path, stat.size, stat.mtime.nanoseconds);
+        errdefer file_report.deinit(allocator);
+        try mergeFileReport(allocator, report, &file_report);
+        try updated_files.append(allocator, file_report);
     }
 }
 
-fn scanFile(allocator: std.mem.Allocator, path: []const u8, report: *Report) !void {
+/// 重新解析一个 rollout 文件并返回可替换的独立统计贡献。
+fn scanFile(allocator: std.mem.Allocator, path: []const u8, size: u64, mtime_ns: i128) !FileReport {
+    var file_report = FileReport{
+        .path = try allocator.dupe(u8, path),
+        .size = size,
+        .mtime_ns = mtime_ns,
+    };
+    errdefer file_report.deinit(allocator);
     var file = std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return,
+        error.FileNotFound => return file_report,
         else => return err,
     };
     defer file.close(app_runtime.io());
     const bytes = registry.readFileAlloc(file, allocator, max_rollout_bytes) catch |err| switch (err) {
-        error.StreamTooLong => return,
+        error.StreamTooLong => return file_report,
         else => return err,
     };
     defer allocator.free(bytes);
@@ -236,7 +335,7 @@ fn scanFile(allocator: std.mem.Allocator, path: []const u8, report: *Report) !vo
         const trimmed = std.mem.trim(u8, line, " \r\t");
         if (trimmed.len == 0) continue;
         var parsed = std.json.parseFromSlice(TokenLineJson, allocator, trimmed, .{ .ignore_unknown_fields = true }) catch {
-            report.parse_errors += 1;
+            file_report.parse_errors += 1;
             continue;
         };
         defer parsed.deinit();
@@ -247,12 +346,12 @@ fn scanFile(allocator: std.mem.Allocator, path: []const u8, report: *Report) !vo
         const current = totalsFromJson(raw);
         const delta = if (previous) |old| blk: {
             if (UsageTotals.subtract(current, old)) |value| break :blk value;
-            report.segmented_sessions += 1;
+            file_report.segmented_sessions += 1;
             break :blk current;
         } else current;
         previous = current;
         if (delta.total_tokens == 0 and delta.input_tokens == 0 and delta.output_tokens == 0) {
-            report.repeated_snapshots += 1;
+            file_report.repeated_snapshots += 1;
             continue;
         }
         const date = if (root.timestamp.len >= 10) root.timestamp[0..10] else continue;
@@ -264,11 +363,163 @@ fn scanFile(allocator: std.mem.Allocator, path: []const u8, report: *Report) !vo
             }
         }
         if (is_new_day_for_file) try touched_days.append(allocator, date);
-        try addDay(allocator, report, date, delta, is_new_day_for_file);
-        report.totals.add(delta);
+        try addFileDay(allocator, &file_report, date, delta, is_new_day_for_file);
+        file_report.totals.add(delta);
         has_usage = true;
     }
-    if (has_usage) report.files_with_usage += 1;
+    file_report.has_usage = has_usage;
+    return file_report;
+}
+
+/// 释放文件缓存列表中的全部深层所有权。
+fn deinitFileReports(allocator: std.mem.Allocator, reports: *std.ArrayList(FileReport)) void {
+    for (reports.items) |*report| report.deinit(allocator);
+    reports.deinit(allocator);
+}
+
+/// 查找路径、大小和修改时间均一致的缓存贡献。
+fn findCachedFile(cached_files: []const FileReport, path: []const u8, size: u64, mtime_ns: i128) ?*const FileReport {
+    for (cached_files) |*cached| {
+        if (cached.size == size and
+            cached.mtime_ns == mtime_ns and
+            std.mem.eql(u8, cached.path, path)) return cached;
+    }
+    return null;
+}
+
+/// 深拷贝一个缓存贡献，避免 JSON 缓冲区或旧缓存列表释放后悬空。
+fn cloneFileReport(allocator: std.mem.Allocator, source: *const FileReport) !FileReport {
+    var cloned = FileReport{
+        .path = try allocator.dupe(u8, source.path),
+        .size = source.size,
+        .mtime_ns = source.mtime_ns,
+        .totals = source.totals,
+        .has_usage = source.has_usage,
+        .repeated_snapshots = source.repeated_snapshots,
+        .segmented_sessions = source.segmented_sessions,
+        .parse_errors = source.parse_errors,
+    };
+    errdefer cloned.deinit(allocator);
+    for (source.days.items) |day| {
+        try cloned.days.append(allocator, .{
+            .date = try allocator.dupe(u8, day.date),
+            .totals = day.totals,
+            .sessions = day.sessions,
+        });
+    }
+    return cloned;
+}
+
+/// 将单文件贡献合并到最终报告，同时保持原有质量指标语义。
+fn mergeFileReport(allocator: std.mem.Allocator, report: *Report, file_report: *const FileReport) !void {
+    report.totals.add(file_report.totals);
+    if (file_report.has_usage) report.files_with_usage += 1;
+    report.repeated_snapshots += file_report.repeated_snapshots;
+    report.segmented_sessions += file_report.segmented_sessions;
+    report.parse_errors += file_report.parse_errors;
+    for (file_report.days.items) |day| {
+        try addDaySessions(allocator, report, day.date, day.totals, day.sessions);
+    }
+}
+
+/// 向单文件贡献中累加自然日数据，并按文件首次触达日期计算会话数。
+fn addFileDay(
+    allocator: std.mem.Allocator,
+    report: *FileReport,
+    date: []const u8,
+    delta: UsageTotals,
+    new_session: bool,
+) !void {
+    for (report.days.items) |*day| {
+        if (std.mem.eql(u8, day.date, date)) {
+            day.totals.add(delta);
+            if (new_session) day.sessions += 1;
+            return;
+        }
+    }
+    try report.days.append(allocator, .{
+        .date = try allocator.dupe(u8, date),
+        .totals = delta,
+        .sessions = 1,
+    });
+}
+
+/// 返回 Token 文件缓存路径；缓存仅保存统计贡献，不包含认证信息。
+fn tokenUsageCachePath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "token-usage-cache.json" });
+}
+
+/// 读取并深拷贝缓存文档；损坏或不兼容缓存由调用方降级为全量解析。
+fn loadCache(allocator: std.mem.Allocator, codex_home: []const u8) !std.ArrayList(FileReport) {
+    const path = try tokenUsageCachePath(allocator, codex_home);
+    defer allocator.free(path);
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{});
+    defer file.close(app_runtime.io());
+    const bytes = try registry.readFileAlloc(file, allocator, max_cache_bytes);
+    defer allocator.free(bytes);
+    var parsed = try std.json.parseFromSlice(CacheDocumentJson, allocator, bytes, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    if (parsed.value.schema_version != cache_schema_version) return error.UnsupportedTokenUsageCacheVersion;
+
+    var files = std.ArrayList(FileReport).empty;
+    errdefer deinitFileReports(allocator, &files);
+    for (parsed.value.files) |cached| {
+        var report = FileReport{
+            .path = try allocator.dupe(u8, cached.path),
+            .size = cached.size,
+            .mtime_ns = cached.mtime_ns,
+            .totals = cached.totals,
+            .has_usage = cached.has_usage,
+            .repeated_snapshots = cached.repeated_snapshots,
+            .segmented_sessions = cached.segmented_sessions,
+            .parse_errors = cached.parse_errors,
+        };
+        errdefer report.deinit(allocator);
+        for (cached.days) |day| {
+            try report.days.append(allocator, .{
+                .date = try allocator.dupe(u8, day.date),
+                .totals = day.totals,
+                .sessions = day.sessions,
+            });
+        }
+        try files.append(allocator, report);
+    }
+    return files;
+}
+
+/// 以私有权限写回最新的逐文件贡献，供下一次增量扫描复用。
+fn saveCache(allocator: std.mem.Allocator, codex_home: []const u8, files: []const FileReport) !void {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    const out = &aw.writer;
+    try out.print("{{\"schema_version\":{d},\"files\":[", .{cache_schema_version});
+    for (files, 0..) |file, file_idx| {
+        if (file_idx != 0) try out.writeAll(",");
+        try out.writeAll("{\"path\":");
+        try std.json.Stringify.value(file.path, .{}, out);
+        try out.print(",\"size\":{d},\"mtime_ns\":{d},\"totals\":", .{ file.size, file.mtime_ns });
+        try writeTotals(out, file.totals);
+        try out.writeAll(",\"days\":[");
+        for (file.days.items, 0..) |day, day_idx| {
+            if (day_idx != 0) try out.writeAll(",");
+            try out.writeAll("{\"date\":");
+            try std.json.Stringify.value(day.date, .{}, out);
+            try out.writeAll(",\"totals\":");
+            try writeTotals(out, day.totals);
+            try out.print(",\"sessions\":{d}}}", .{day.sessions});
+        }
+        try out.print("],\"has_usage\":{},\"repeated_snapshots\":{d},\"segmented_sessions\":{d},\"parse_errors\":{d}}}", .{
+            file.has_usage,
+            file.repeated_snapshots,
+            file.segmented_sessions,
+            file.parse_errors,
+        });
+    }
+    try out.writeAll("]}");
+    try registry.ensureAccountsDir(allocator, codex_home);
+    const path = try tokenUsageCachePath(allocator, codex_home);
+    defer allocator.free(path);
+    try registry.writeFile(path, aw.written());
 }
 
 fn totalsFromJson(value: TokenUsageJson) UsageTotals {
@@ -281,18 +532,19 @@ fn totalsFromJson(value: TokenUsageJson) UsageTotals {
     };
 }
 
-fn addDay(allocator: std.mem.Allocator, report: *Report, date: []const u8, delta: UsageTotals, new_session: bool) !void {
+/// 合并已经聚合好的自然日贡献，支持从文件缓存恢复会话计数。
+fn addDaySessions(allocator: std.mem.Allocator, report: *Report, date: []const u8, delta: UsageTotals, sessions: usize) !void {
     for (report.days.items) |*day| {
         if (std.mem.eql(u8, day.date, date)) {
             day.totals.add(delta);
-            if (new_session) day.sessions += 1;
+            day.sessions += sessions;
             return;
         }
     }
     try report.days.append(allocator, .{
         .date = try allocator.dupe(u8, date),
         .totals = delta,
-        .sessions = 1,
+        .sessions = sessions,
     });
 }
 

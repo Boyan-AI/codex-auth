@@ -33,6 +33,29 @@ pub fn exportAccounts(
     maybe_dest_path: ?[]const u8,
     format: ExportFormat,
 ) !ExportSummary {
+    return exportAccountsFiltered(allocator, codex_home, reg, maybe_dest_path, format, false);
+}
+
+/// 只导出明确加入智能池的账号，供 CPA 初始认证目录使用。
+pub fn exportSmartPoolAccounts(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+    maybe_dest_path: ?[]const u8,
+    format: ExportFormat,
+) !ExportSummary {
+    return exportAccountsFiltered(allocator, codex_home, reg, maybe_dest_path, format, true);
+}
+
+/// 按智能池过滤条件导出账号，同时保留原有完整导出语义。
+fn exportAccountsFiltered(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+    maybe_dest_path: ?[]const u8,
+    format: ExportFormat,
+    smart_pool_only: bool,
+) !ExportSummary {
     const dest_path = if (maybe_dest_path) |path|
         try allocator.dupe(u8, path)
     else
@@ -40,9 +63,13 @@ pub fn exportAccounts(
     errdefer allocator.free(dest_path);
 
     try ensurePrivateDir(dest_path);
+    if (smart_pool_only) {
+        try removeExcludedCpaFiles(allocator, reg, dest_path);
+    }
 
     var exported: usize = 0;
     for (reg.accounts.items) |rec| {
+        if (smart_pool_only and !rec.smart_pool_enabled) continue;
         if (format == .cpa and rec.auth_mode != null and rec.auth_mode.? == .apikey) {
             std.log.warn("skipping API-key account {s}: CPA export requires ChatGPT tokens", .{rec.email});
             continue;
@@ -73,6 +100,64 @@ pub fn exportAccounts(
     return .{
         .dest_path = dest_path,
         .exported = exported,
+    };
+}
+
+/// 同步单个账号的 CPA 凭据副本；排除操作只删除该账号确定性文件名。
+pub fn syncCpaAccount(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+    account_key: []const u8,
+    auth_dir: []const u8,
+    enabled: bool,
+) !void {
+    try ensurePrivateDir(auth_dir);
+    const base_name = try accountSnapshotFileName(allocator, account_key);
+    defer allocator.free(base_name);
+    const dest_name = try cpaExportFileName(allocator, base_name);
+    defer allocator.free(dest_name);
+    const dest = try std.fs.path.join(allocator, &[_][]const u8{ auth_dir, dest_name });
+    defer allocator.free(dest);
+
+    if (!enabled) {
+        try removeCpaFile(dest);
+        return;
+    }
+
+    const rec = for (reg.accounts.items) |candidate| {
+        if (std.mem.eql(u8, candidate.account_key, account_key)) break candidate;
+    } else return error.AccountNotFound;
+    if (!rec.smart_pool_enabled) return error.AccountExcludedFromSmartPool;
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return error.UnsupportedCpaAuthMode;
+    const src = try accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(src);
+    try exportCpaFile(allocator, src, dest);
+}
+
+/// 全量智能池导出时移除已知且明确排除的旧副本，未知文件保持不变。
+fn removeExcludedCpaFiles(
+    allocator: std.mem.Allocator,
+    reg: *const Registry,
+    auth_dir: []const u8,
+) !void {
+    for (reg.accounts.items) |rec| {
+        if (rec.smart_pool_enabled) continue;
+        const base_name = try accountSnapshotFileName(allocator, rec.account_key);
+        defer allocator.free(base_name);
+        const dest_name = try cpaExportFileName(allocator, base_name);
+        defer allocator.free(dest_name);
+        const dest = try std.fs.path.join(allocator, &[_][]const u8{ auth_dir, dest_name });
+        defer allocator.free(dest);
+        try removeCpaFile(dest);
+    }
+}
+
+/// 幂等删除一个确定性 CPA 文件，避免不存在文件阻断状态同步。
+fn removeCpaFile(path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(app_runtime.io(), path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
     };
 }
 

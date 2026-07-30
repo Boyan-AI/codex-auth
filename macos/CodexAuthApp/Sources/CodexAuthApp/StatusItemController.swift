@@ -61,6 +61,7 @@ struct StatusItemPresentation: Equatable {
 @MainActor
 final class StatusItemController: NSObject, ObservableObject {
     private let appState: AppState
+    private let managementWindowController: ManagementWindowController
     private let statusItem: NSStatusItem
     private let statusItemView = QuotaStatusItemView(frame: NSRect(x: 0, y: 0, width: 78, height: NSStatusBar.system.thickness))
     private let popover = NSPopover()
@@ -70,6 +71,7 @@ final class StatusItemController: NSObject, ObservableObject {
 
     init(appState: AppState) {
         self.appState = appState
+        self.managementWindowController = ManagementWindowController(appState: appState)
         self.statusItem = NSStatusBar.system.statusItem(withLength: 78)
         super.init()
         configurePopover()
@@ -85,6 +87,8 @@ final class StatusItemController: NSObject, ObservableObject {
         popover.contentViewController = NSHostingController(
             rootView: MenuBarView(closeMenu: { [weak self] in
                 self?.closePopover()
+            }, openManagement: { [weak self] section in
+                self?.managementWindowController.show(section: section)
             })
                 .environmentObject(appState)
                 .frame(width: 420)

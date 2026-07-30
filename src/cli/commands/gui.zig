@@ -16,15 +16,14 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     const subcommand = std.mem.sliceTo(args[0], 0);
     if (std.mem.eql(u8, subcommand, "state")) return parseStateLike(allocator, .state, args[1..]);
     if (std.mem.eql(u8, subcommand, "refresh")) return parseStateLike(allocator, .refresh, args[1..]);
-    if (std.mem.eql(u8, subcommand, "stats")) {
-        if (args.len > 1) return common.usageErrorResult(allocator, .gui, "unexpected argument for `gui stats`.", .{});
-        return .{ .command = .{ .gui = .{ .stats = {} } } };
-    }
+    if (std.mem.eql(u8, subcommand, "stats")) return parseStats(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "switch")) return parseAccountKeyCommand(allocator, "gui switch", .switch_account, args[1..]);
     if (std.mem.eql(u8, subcommand, "remove")) return parseAccountKeyCommand(allocator, "gui remove", .remove_account, args[1..]);
     if (std.mem.eql(u8, subcommand, "login")) return parseLogin(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "import")) return parseImport(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "alias")) return parseAlias(allocator, args[1..]);
+    if (std.mem.eql(u8, subcommand, "smart-pool")) return parseSmartPool(allocator, args[1..]);
+    if (std.mem.eql(u8, subcommand, "cpa-sync")) return parseCpaSync(allocator, args[1..]);
 
     if (common.isHelpFlag(subcommand)) {
         return common.usageErrorResult(allocator, .gui, "`--help` must be used by itself for `gui`.", .{});
@@ -33,6 +32,63 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui`.", .{subcommand});
     }
     return common.usageErrorResult(allocator, .gui, "unknown gui subcommand `{s}`.", .{subcommand});
+}
+
+/// 解析单账号 CPA 凭据同步命令，目录参数必须显式提供。
+fn parseCpaSync(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len != 3) {
+        return common.usageErrorResult(allocator, .gui, "`gui cpa-sync` requires an account key, `include` or `exclude`, and an auth directory.", .{});
+    }
+    const action = std.mem.sliceTo(args[1], 0);
+    const enabled = if (std.mem.eql(u8, action, "include"))
+        true
+    else if (std.mem.eql(u8, action, "exclude"))
+        false
+    else
+        return common.usageErrorResult(allocator, .gui, "`gui cpa-sync` action must be `include` or `exclude`.", .{});
+    const account_key = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0));
+    errdefer allocator.free(account_key);
+    const auth_dir = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0));
+    return .{ .command = .{ .gui = .{ .cpa_sync = .{
+        .account_key = account_key,
+        .auth_dir = auth_dir,
+        .enabled = enabled,
+    } } } };
+}
+
+/// 解析账号加入或排除智能路由池的机器接口。
+fn parseSmartPool(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len != 2) {
+        return common.usageErrorResult(allocator, .gui, "`gui smart-pool` requires an account key and `include` or `exclude`.", .{});
+    }
+    const action = std.mem.sliceTo(args[1], 0);
+    const enabled = if (std.mem.eql(u8, action, "include"))
+        true
+    else if (std.mem.eql(u8, action, "exclude"))
+        false
+    else
+        return common.usageErrorResult(allocator, .gui, "`gui smart-pool` action must be `include` or `exclude`.", .{});
+    return .{ .command = .{ .gui = .{ .smart_pool = .{
+        .account_key = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0)),
+        .enabled = enabled,
+    } } } };
+}
+
+/// 解析 Token 统计扫描模式；默认增量复用缓存，菜单全量刷新使用 `--full`。
+fn parseStats(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    var opts: types.GuiStatsOptions = .{};
+    for (args) |arg_z| {
+        const arg = std.mem.sliceTo(arg_z, 0);
+        if (std.mem.eql(u8, arg, "--full")) {
+            if (opts.full) return common.usageErrorResult(allocator, .gui, "duplicate `--full` for `gui stats`.", .{});
+            opts.full = true;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui stats`.", .{arg});
+        } else {
+            return common.usageErrorResult(allocator, .gui, "unexpected argument `{s}` for `gui stats`.", .{arg});
+        }
+    }
+    return .{ .command = .{ .gui = .{ .stats = opts } } };
 }
 
 fn parseStateLike(

@@ -8,7 +8,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 4;
+pub const current_schema_version: u32 = 5;
 pub const min_supported_schema_version: u32 = 2;
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
     .windows => .default_file,
@@ -103,6 +103,8 @@ pub const AccountRecord = struct {
     last_usage: ?RateLimitSnapshot,
     last_usage_at: ?i64,
     last_local_rollout: ?RolloutSignature,
+    /// 标记账号是否参与 CPA 智能路由池；旧记录缺失时默认加入。
+    smart_pool_enabled: bool = true,
 };
 
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {

@@ -114,8 +114,11 @@ const sortAccountsByEmail = import_mod.sortAccountsByEmail;
 const syncCurrentAuthBestEffort = import_mod.syncCurrentAuthBestEffort;
 
 pub const ExportSummary = export_mod.ExportSummary;
+pub const ExportFormat = export_mod.ExportFormat;
 pub const defaultExportDirectory = export_mod.defaultExportDirectory;
 pub const exportAccounts = export_mod.exportAccounts;
+pub const exportSmartPoolAccounts = export_mod.exportSmartPoolAccounts;
+pub const syncCpaAccount = export_mod.syncCpaAccount;
 
 pub const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 pub const setActiveAccountKey = account_ops.setActiveAccountKey;

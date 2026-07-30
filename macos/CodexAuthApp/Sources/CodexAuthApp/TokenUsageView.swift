@@ -15,9 +15,10 @@ private enum TokenUsagePeriod {
     case month
 }
 
-    /// 展示今日、本周和本月的 Token 消耗摘要。
+/// 展示今日、本周和本月的 Token 消耗摘要。
 struct TokenUsageView: View {
     let info: TokenUsageInfo?
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -31,7 +32,7 @@ struct TokenUsageView: View {
             }
         }
         .padding(14)
-        .frame(width: 560)
+        .frame(width: compact ? 400 : 560)
         .background(Color(red: 0.93, green: 0.96, blue: 1.0))
     }
 

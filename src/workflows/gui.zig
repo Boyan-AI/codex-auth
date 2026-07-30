@@ -13,17 +13,52 @@ pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli
     switch (opts) {
         .state => |state_opts| try handleState(allocator, codex_home, state_opts, false),
         .refresh => |state_opts| try handleState(allocator, codex_home, state_opts, true),
-        .stats => try handleStats(allocator, codex_home),
+        .stats => |stats_opts| try handleStats(allocator, codex_home, stats_opts),
         .switch_account => |account_key| try handleSwitch(allocator, codex_home, account_key),
         .login => |login_opts| try handleLogin(allocator, codex_home, login_opts),
         .import_auth => |import_opts| try handleImport(allocator, codex_home, import_opts),
         .remove_account => |account_key| try handleRemove(allocator, codex_home, account_key),
         .alias => |alias_opts| try handleAlias(allocator, codex_home, alias_opts),
+        .smart_pool => |pool_opts| try handleSmartPool(allocator, codex_home, pool_opts),
+        .cpa_sync => |sync_opts| try handleCpaSync(allocator, codex_home, sync_opts),
     }
 }
 
-fn handleStats(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var report = try token_usage.scan(allocator, codex_home);
+/// 将单个账号复制到或移出独立 CPA 认证目录，不修改官方 Codex 活动凭据。
+fn handleCpaSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaSyncOptions) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    try registry.syncCpaAccount(allocator, codex_home, &reg, opts.account_key, opts.auth_dir, opts.enabled);
+
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.writeAll("{\"account_key\":");
+    try writeJsonString(out, opts.account_key);
+    try out.print(",\"enabled\":{}}}\n", .{opts.enabled});
+    try out.flush();
+}
+
+/// 更新账号的智能池成员状态，并返回最新 GUI 状态。
+fn handleSmartPool(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.types.GuiSmartPoolOptions,
+) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    const idx = registry.findAccountIndexByAccountKey(&reg, opts.account_key) orelse return error.AccountNotFound;
+    reg.accounts.items[idx].smart_pool_enabled = opts.enabled;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
+}
+
+/// 根据 GUI 请求选择强制全量解析或基于文件签名的增量扫描。
+fn handleStats(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiStatsOptions) !void {
+    var report = if (opts.full)
+        try token_usage.scanFull(allocator, codex_home)
+    else
+        try token_usage.scan(allocator, codex_home);
     defer report.deinit(allocator);
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -240,6 +275,7 @@ fn writeAccountJson(
     } else {
         try out.writeAll("null");
     }
+    try out.print(",\"smart_pool_enabled\":{}", .{rec.smart_pool_enabled});
     const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, rec.account_key) else false;
     try out.print(",\"is_active\":{},", .{is_active});
     try out.writeAll("\"usage\":{");

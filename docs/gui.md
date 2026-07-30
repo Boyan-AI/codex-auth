@@ -11,9 +11,11 @@ results and failures into Chinese UI text.
 ```shell
 codex-auth gui state [--active] [--api|--skip-api]
 codex-auth gui refresh [--active] [--api|--skip-api]
-codex-auth gui stats
+codex-auth gui stats [--full]
 codex-auth gui switch <account-key>
 codex-auth gui remove <account-key>
+codex-auth gui smart-pool <account-key> include|exclude
+codex-auth gui cpa-sync <account-key> include|exclude <auth-dir>
 codex-auth gui alias set <account-key> <alias>
 codex-auth gui alias clear <account-key>
 codex-auth gui import <path> [--alias <alias>]
@@ -28,7 +30,9 @@ uses deltas between successive `total_token_usage` snapshots, so repeated snapsh
 from rate-limit updates are not counted twice. The result is local telemetry and is
 not an official subscription bill or quota ledger. `today` is the current UTC day;
 `days` contains the complete daily series so the macOS app can aggregate it into
-daily, weekly, monthly, and yearly charts.
+daily, weekly, monthly, and yearly charts. The default mode reuses unchanged per-file
+contributions from `accounts/token-usage-cache.json`; `--full` reparses every rollout
+file and replaces the cache.
 
 Token stats fields:
 
@@ -63,7 +67,9 @@ Account fields:
 - `account_name`
 - `plan`
 - `auth_mode`
+- `smart_pool_enabled`: whether the account participates in CPA smart routing; it does not change the active direct account.
 - `is_active`
+- `reset_credits`: reset opportunities for this account during a GUI refresh, or `null` when the query failed or was skipped.
 - `usage.five_hour`: usage window object or `null` when the API does not explicitly report a 300-minute window.
 - `usage.seven_day`
 - `last_usage_at`
@@ -87,3 +93,12 @@ Reset credit fields:
 `gui switch <account-key>` has the same account activation semantics as the CLI switch path:
 it replaces the active auth file and saves the registry. It affects new Codex CLI sessions.
 Already-running `codex` processes are not modified.
+
+`gui smart-pool <account-key> include|exclude` only changes routing membership. It
+does not replace `auth.json`, switch the active direct account, or authenticate the
+account with CPA.
+
+`gui cpa-sync <account-key> include|exclude <auth-dir>` applies that membership to an
+independent CPA directory. `include` writes the selected ChatGPT account using the CPA
+export format; `exclude` removes only the deterministic file for that account. The
+desktop app invokes this command after the membership state has been saved.

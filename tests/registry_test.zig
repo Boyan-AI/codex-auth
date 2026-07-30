@@ -518,7 +518,7 @@ test "registry save/load round-trips account_name null" {
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
 }
 
-test "registry load normalizes schema four without previous active account key" {
+test "registry load migrates schema four to five" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -547,8 +547,74 @@ test "registry load normalizes schema four without previous active account key" 
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
+}
+
+test "registry schema five defaults missing smart pool field to enabled and rewrites it" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 5,
+        \\  "active_account_key": null,
+        \\  "previous_active_account_key": null,
+        \\  "active_account_activated_at_ms": null,
+        \\  "interval_seconds": 60,
+        \\  "accounts": [
+        \\    {
+        \\      "account_key": "user-one::account-one",
+        \\      "chatgpt_account_id": "account-one",
+        \\      "chatgpt_user_id": "user-one",
+        \\      "email": "one@example.com",
+        \\      "alias": "one",
+        \\      "created_at": 1,
+        \\      "last_used_at": null,
+        \\      "last_usage_at": null
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(loaded.accounts.items[0].smart_pool_enabled);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"smart_pool_enabled\": true") != null);
+}
+
+test "registry save and load preserves smart pool exclusion" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var rec = try makeAccountRecord(gpa, "excluded@example.com", "excluded", .plus, .chatgpt, 1);
+    rec.smart_pool_enabled = false;
+    try reg.accounts.append(gpa, rec);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(!loaded.accounts.items[0].smart_pool_enabled);
 }
 
 test "registry save/load round-trips account_name string" {
@@ -786,7 +852,7 @@ test "legacy schema registry with legacy rollout attribution rewrites to normali
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_activated_at_ms\": 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"last_attributed_rollout\"") == null);
 }
@@ -818,7 +884,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"interval_seconds\": 60") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"live\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
@@ -907,7 +973,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
@@ -1955,4 +2021,53 @@ test "export accounts writes cpa token files to default backup directory" {
     defer gpa.free(exported);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
+}
+
+test "smart pool export and single account sync preserve routing membership" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "smart-pool@example.com", "plus");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer import_report.deinit(gpa);
+    const account_key = reg.accounts.items[0].account_key;
+
+    const export_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "cpa-auth" });
+    defer gpa.free(export_dir);
+    var summary = try registry.exportSmartPoolAccounts(gpa, codex_home, &reg, export_dir, .cpa);
+    defer summary.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), summary.exported);
+
+    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
+    defer gpa.free(snapshot_name);
+    const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{ snapshot_name[0 .. snapshot_name.len - ".auth.json".len], ".json" });
+    defer gpa.free(cpa_name);
+    const exported_path = try fs.path.join(gpa, &[_][]const u8{ export_dir, cpa_name });
+    defer gpa.free(exported_path);
+    _ = try fs.cwd().statFile(exported_path);
+
+    reg.accounts.items[0].smart_pool_enabled = false;
+    var excluded_summary = try registry.exportSmartPoolAccounts(gpa, codex_home, &reg, export_dir, .cpa);
+    defer excluded_summary.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), excluded_summary.exported);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
+
+    reg.accounts.items[0].smart_pool_enabled = true;
+    try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, true);
+    _ = try fs.cwd().statFile(exported_path);
+    reg.accounts.items[0].smart_pool_enabled = false;
+    try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, false);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
 }

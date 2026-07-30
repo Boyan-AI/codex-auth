@@ -17,6 +17,22 @@ enum CodexAuthAPIMode: Equatable {
     }
 }
 
+/// 区分菜单全量校验与 CPA 事件触发的增量 Token 文件扫描。
+enum TokenUsageScanMode: Equatable {
+    case incremental
+    case full
+
+    /// 映射为 GUI 后端的稳定英文命令参数。
+    var arguments: [String] {
+        switch self {
+        case .incremental:
+            return []
+        case .full:
+            return ["--full"]
+        }
+    }
+}
+
 struct CodexAuthState: Decodable, Equatable {
     let schemaVersion: Int
     let codexHome: String
@@ -147,8 +163,8 @@ struct ResetCreditsInfo: Decodable, Equatable {
 
     /// 返回账户详情使用的 reset 文案，不携带菜单栏胶囊中的分隔符。
     var accountDetailText: String {
-        let expiry = expiresAt.map { "  \(UsageResetDateFormatter.string(from: $0))" } ?? ""
-        return "重置: \(availableCount)次\(expiry)"
+        let expiry = expiresAt.map { " · 最近到期 \(UsageResetDateFormatter.string(from: $0))" } ?? ""
+        return "重置 \(availableCount)次\(expiry)"
     }
 
     /// 返回菜单栏使用的 reset 摘要，日期使用本地时区显示。
@@ -173,12 +189,23 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     let plan: String?
     let authMode: String?
     var resetCredits: ResetCreditsInfo? = nil
+    let smartPoolEnabled: Bool?
     let isActive: Bool
     let usage: UsageInfo
     let lastUsageAt: Date?
     let lastRefreshAt: Date?
 
     var id: String { accountKey }
+
+    /// 兼容尚未输出 schema 5 字段的旧 GUI 后端，缺失时默认加入智能池。
+    var participatesInSmartPool: Bool {
+        smartPoolEnabled ?? true
+    }
+
+    /// 仅把存在有效周额度的账号视为可选择状态，错误文本继续原样展示。
+    var isAvailable: Bool {
+        usage.sevenDay.status == "ok" && usage.sevenDay.remainingPercent != nil
+    }
 
     var primaryLabel: String {
         if let alias, !alias.isEmpty {
@@ -265,6 +292,7 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             accountName: nil,
             plan: "pro",
             authMode: "chatgpt",
+            smartPoolEnabled: true,
             isActive: isActive,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 100, total: 100, used: 0, resetAt: nil),
