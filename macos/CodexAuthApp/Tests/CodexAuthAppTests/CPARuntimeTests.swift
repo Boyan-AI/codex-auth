@@ -54,6 +54,27 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertFalse(command.contains("never-render-this-key"))
     }
 
+    /// 验证中转站直连使用单次 provider 覆盖并复用当前 auth.json，不渲染密钥。
+    func testDirectLaunchCommandUsesRelayProviderOverrides() throws {
+        let data = Data(#"{"account_key":"relay","display_name":"Relay","alias":null,"email":null,"account_name":"sk-test","plan":null,"auth_mode":"apikey","smart_pool_enabled":false,"provider_kind":"relay","base_url":"https://relay.example.com/v1","balance":null,"is_active":true,"usage":{"five_hour":null,"seven_day":{"status":"not_applicable","remaining_percent":null,"total":null,"used":null,"reset_at":null}},"last_usage_at":null,"last_refresh_at":null}"#.utf8)
+        let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: data)
+
+        let command = CodexDirectLaunchCommand.build(account: account)
+
+        XCTAssertTrue(command.contains(#"model_provider="codex_auth_direct""#))
+        XCTAssertTrue(command.contains(#"model_providers.codex_auth_direct.base_url="https://relay.example.com/v1""#))
+        XCTAssertTrue(command.contains("model_providers.codex_auth_direct.requires_openai_auth=true"))
+        XCTAssertFalse(command.contains("env_key"))
+        XCTAssertTrue(command.hasSuffix("resume --last"))
+    }
+
+    /// 验证账号和官方 Key 直连无需自定义 provider。
+    func testDirectLaunchCommandUsesDefaultProviderForOfficialConnection() {
+        let account = CodexAccount.sample(accountKey: "account", alias: "账号", isActive: true)
+
+        XCTAssertEqual(CodexDirectLaunchCommand.build(account: account), "codex resume --last")
+    }
+
     /// 验证桌面 App 可从用户级安装文件读取客户端、管理端和认证目录配置。
     func testInstalledProviderLoadsClientConfiguration() throws {
         let directory = FileManager.default.temporaryDirectory

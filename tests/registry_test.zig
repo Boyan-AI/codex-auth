@@ -617,6 +617,38 @@ test "registry save and load preserves smart pool exclusion" {
     try std.testing.expect(!loaded.accounts.items[0].smart_pool_enabled);
 }
 
+test "registry save and load preserves API key provider metadata and balance snapshot" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var rec = try makeAccountRecord(gpa, "relay@example.com", "relay", null, .apikey, 1);
+    rec.provider_kind = .relay;
+    rec.base_url = try gpa.dupe(u8, "https://relay.example/v1");
+    rec.balance_snapshot = .{
+        .amount = try gpa.dupe(u8, "12.50"),
+        .currency = try gpa.dupe(u8, "USD"),
+        .updated_at = 100,
+    };
+    try reg.accounts.append(gpa, rec);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const loaded_rec = &loaded.accounts.items[0];
+    try std.testing.expectEqual(registry.ProviderKind.relay, loaded_rec.provider_kind.?);
+    try std.testing.expectEqualStrings("https://relay.example/v1", loaded_rec.base_url.?);
+    try std.testing.expectEqualStrings("12.50", loaded_rec.balance_snapshot.?.amount);
+    try std.testing.expectEqualStrings("USD", loaded_rec.balance_snapshot.?.currency);
+    try std.testing.expectEqual(@as(i64, 100), loaded_rec.balance_snapshot.?.updated_at);
+}
+
 test "registry save/load round-trips account_name string" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

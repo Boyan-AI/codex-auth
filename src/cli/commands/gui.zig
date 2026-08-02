@@ -24,6 +24,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, subcommand, "alias")) return parseAlias(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "smart-pool")) return parseSmartPool(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "cpa-sync")) return parseCpaSync(allocator, args[1..]);
+    if (std.mem.eql(u8, subcommand, "add-key")) return parseAddApiKey(allocator, args[1..]);
 
     if (common.isHelpFlag(subcommand)) {
         return common.usageErrorResult(allocator, .gui, "`--help` must be used by itself for `gui`.", .{});
@@ -32,6 +33,25 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui`.", .{subcommand});
     }
     return common.usageErrorResult(allocator, .gui, "unknown gui subcommand `{s}`.", .{subcommand});
+}
+
+/// 解析 API Key 连接创建参数；密钥由调用方通过 CODEX_AUTH_API_KEY 环境变量传递。
+fn parseAddApiKey(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len != 3) {
+        return common.usageErrorResult(allocator, .gui, "`gui add-key` requires a name, `openai` or `relay`, and a base URL.", .{});
+    }
+    const provider_text = std.mem.sliceTo(args[1], 0);
+    const provider: types.ApiKeyProvider = if (std.mem.eql(u8, provider_text, "openai"))
+        .openai
+    else if (std.mem.eql(u8, provider_text, "relay"))
+        .relay
+    else
+        return common.usageErrorResult(allocator, .gui, "`gui add-key` provider must be `openai` or `relay`.", .{});
+    return .{ .command = .{ .gui = .{ .add_api_key = .{
+        .alias = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0)),
+        .provider = provider,
+        .base_url = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0)),
+    } } } };
 }
 
 /// 解析单账号 CPA 凭据同步命令，目录参数必须显式提供。

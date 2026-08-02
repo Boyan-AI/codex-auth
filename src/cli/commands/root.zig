@@ -101,6 +101,10 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
                 allocator.free(sync_opts.account_key);
                 allocator.free(sync_opts.auth_dir);
             },
+            .add_api_key => |add_opts| {
+                allocator.free(add_opts.alias);
+                allocator.free(add_opts.base_url);
+            },
             .import_auth => |import_opts| {
                 allocator.free(import_opts.auth_path);
                 if (import_opts.alias) |alias_value| allocator.free(alias_value);

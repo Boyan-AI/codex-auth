@@ -51,7 +51,7 @@ struct MenuBarView: View {
     private var smartLaunch: some View {
         VStack(spacing: 6) {
             Button {
-                openCodexSessionAfterChoosingDirectory()
+                openCodexSessionAfterChoosingDirectory(smart: true)
             } label: {
                 Text("智能启动 Codex")
                     .frame(maxWidth: .infinity)
@@ -60,7 +60,17 @@ struct MenuBarView: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
 
-            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个账号可用")
+            Button {
+                openCodexSessionAfterChoosingDirectory(smart: false)
+            } label: {
+                Text("直连启动 Codex")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .disabled(appState.state?.activeAccount == nil)
+
+            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个连接可用")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -194,12 +204,18 @@ struct MenuBarView: View {
 
     /// 关闭菜单后选择目录，并把目录交给 CPA 智能启动流程。
     @MainActor
-    private func openCodexSessionAfterChoosingDirectory() {
+    private func openCodexSessionAfterChoosingDirectory(smart: Bool) {
         CodexSessionMenuAction(
             closeMenu: closeMenu,
             chooseDirectory: CodexDirectoryPicker.chooseDirectory,
             openSession: { directoryPath in
-                Task { await appState.openNewCodexSession(at: directoryPath) }
+                Task {
+                    if smart {
+                        await appState.openNewCodexSession(at: directoryPath)
+                    } else {
+                        await appState.openDirectCodexSession(at: directoryPath)
+                    }
+                }
             }
         ).run()
     }

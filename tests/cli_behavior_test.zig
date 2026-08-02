@@ -226,6 +226,30 @@ test "Scenario: Given gui cpa sync when parsing then account action and director
     }
 }
 
+test "Scenario: Given gui add-key when parsing then provider metadata is preserved without a secret argument" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{
+        "codex-auth", "gui", "add-key", "AI 系统", "relay", "https://api.example.com/v1",
+    };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .add_api_key => |add_opts| {
+                    try std.testing.expectEqualStrings("AI 系统", add_opts.alias);
+                    try std.testing.expectEqual(cli.types.ApiKeyProvider.relay, add_opts.provider);
+                    try std.testing.expectEqualStrings("https://api.example.com/v1", add_opts.base_url);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given gui switch account key when parsing then key is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "gui", "switch", "acct-key" };

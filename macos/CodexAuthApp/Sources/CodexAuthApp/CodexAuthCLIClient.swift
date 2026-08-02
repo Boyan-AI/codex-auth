@@ -28,8 +28,10 @@ protocol CodexAuthClientProtocol {
     func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws
     func login() async throws -> CodexAuthState
+    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState
     func openNewCodexSession(at directoryPath: String) async throws
+    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws
     func checkCPAConnection() async -> CPAConnectionStatus
     func pollCPAEvents() async throws -> CPAEventBatch
 }
@@ -52,6 +54,16 @@ extension CodexAuthClientProtocol {
 
     /// 兼容尚未实现 CPA 凭据同步的替代客户端。
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws {}
+
+    /// 未实现 Key 创建的替代客户端返回明确错误。
+    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState {
+        throw CodexAuthCLIError.commandFailed("API Key connections are unavailable")
+    }
+
+    /// 未实现直连启动的替代客户端返回明确错误。
+    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws {
+        throw CodexAuthCLIError.commandFailed("Direct launch is unavailable")
+    }
 
     /// 兼容尚未实现 CPA 事件轮询的替代客户端。
     func pollCPAEvents() async throws -> CPAEventBatch {
@@ -195,13 +207,28 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         guard let authDirectoryPath = configuration.authDirectoryPath else {
             throw CPARuntimeError.missingAuthDirectory
         }
+        var environment = [String: String]()
+        if let managementKey = configuration.managementKey {
+            environment["CODEX_AUTH_CPA_MANAGEMENT_KEY"] = managementKey
+            environment["CODEX_AUTH_CPA_MANAGEMENT_URL"] = configuration.managementBaseURL
+                .appendingPathComponent("codex-api-key")
+                .absoluteString
+        }
         try await runVoidCommand([
             "gui", "cpa-sync", accountKey, enabled ? "include" : "exclude", authDirectoryPath,
-        ])
+        ], environment: environment.isEmpty ? nil : environment)
     }
 
     func login() async throws -> CodexAuthState {
         try await runStateCommand(["gui", "login"])
+    }
+
+    /// 通过环境变量传递密钥，避免敏感值进入进程参数和系统进程列表。
+    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState {
+        try await runStateCommand(
+            ["gui", "add-key", alias, provider.rawValue, baseURL],
+            environment: ["CODEX_AUTH_API_KEY": apiKey]
+        )
     }
 
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState {
@@ -240,6 +267,32 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         let command = CodexSmartLaunchCommand.build(configuration: configuration)
         let environment = [CPAConfiguration.apiKeyEnvironmentName: configuration.apiKey]
 
+        try await launchCodexSession(
+            at: directoryPath,
+            command: command,
+            environment: environment,
+            ghosttyEnvironmentVariable: CPAConfiguration.apiKeyEnvironmentName
+        )
+    }
+
+    /// 使用当前直连认证启动 Codex；中转站仅对本次进程附加 provider 覆盖。
+    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws {
+        try await launchCodexSession(
+            at: directoryPath,
+            command: CodexDirectLaunchCommand.build(account: account),
+            environment: [:],
+            ghosttyEnvironmentVariable: nil
+        )
+    }
+
+    /// 在 Ghostty 或 Terminal 中启动指定 Codex 命令，并按需注入单个受保护环境变量。
+    private func launchCodexSession(
+        at directoryPath: String,
+        command: String,
+        environment: [String: String],
+        ghosttyEnvironmentVariable: String?
+    ) async throws {
+
         if !fileExists(Self.ghosttyAppURL) {
             try await openNewTerminalCodexSession(
                 at: directoryPath,
@@ -249,13 +302,22 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
             return
         }
 
+        let environmentSetup: String
+        let surfaceEnvironment: String
+        if let ghosttyEnvironmentVariable {
+            environmentSetup = "set launchValue to do shell script \"/usr/bin/printenv \(ghosttyEnvironmentVariable)\""
+            surfaceEnvironment = ", environment variables:{\"\(ghosttyEnvironmentVariable)=\" & launchValue}"
+        } else {
+            environmentSetup = ""
+            surfaceEnvironment = ""
+        }
         let script = """
         set targetPath to \(appleScriptStringLiteral(directoryPath))
         set initialCommand to \(appleScriptStringLiteral(command)) & linefeed
-        set cpaKey to do shell script "/usr/bin/printenv CODEX_AUTH_CPA_API_KEY"
+        \(environmentSetup)
         tell application "Ghostty"
             activate
-            set surfaceConfig to new surface configuration from {initial working directory:targetPath, initial input:initialCommand, environment variables:{"CODEX_AUTH_CPA_API_KEY=" & cpaKey}}
+            set surfaceConfig to new surface configuration from {initial working directory:targetPath, initial input:initialCommand\(surfaceEnvironment)}
             if (count of windows) is 0 then
                 new window with configuration surfaceConfig
             else
@@ -266,7 +328,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         let result = try await runner.run(
             executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
             arguments: ["-e", script],
-            environment: environment
+            environment: environment.isEmpty ? nil : environment
         )
         guard result.exitCode == 0 else {
             let stderr = String(data: result.standardError, encoding: .utf8)?
@@ -336,8 +398,8 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     }
 
     /// 执行无 JSON 返回值的内部 CLI 命令，并统一保留后端英文错误文本。
-    private func runVoidCommand(_ arguments: [String]) async throws {
-        let result = try await runner.run(executableURL: executableURL, arguments: arguments)
+    private func runVoidCommand(_ arguments: [String], environment: [String: String]? = nil) async throws {
+        let result = try await runner.run(executableURL: executableURL, arguments: arguments, environment: environment)
         guard result.exitCode == 0 else {
             let stderr = String(data: result.standardError, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)

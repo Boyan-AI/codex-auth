@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 展示精简账号摘要；整行点击只修改下一次官方直连会话使用的账号。
+/// 展示统一连接摘要；整行点击只修改下一次官方直连会话使用的连接。
 struct AccountRow: View {
     @EnvironmentObject private var appState: AppState
     let account: CodexAccount
@@ -11,7 +11,7 @@ struct AccountRow: View {
             Task { await appState.switchAccount(accountKey: account.accountKey) }
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                selectionIcon
+                connectionIcon
                     .frame(width: 28, height: 28)
                     .padding(.top, 2)
 
@@ -20,7 +20,7 @@ struct AccountRow: View {
                         Text(account.primaryLabel)
                             .font(.system(size: 15, weight: account.isActive ? .semibold : .medium))
                             .foregroundStyle(.primary)
-                        Text(account.planLabel)
+                        Text(account.isAPIKey ? "Key" : account.planLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 7)
@@ -32,8 +32,16 @@ struct AccountRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    usageLines
-                    resetCreditsLine
+                    if account.isAPIKey {
+                        if let balance = account.balanceText {
+                            Text("余额 \(balance)")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    } else {
+                        usageLines
+                        resetCreditsLine
+                    }
                 }
 
                 Spacer(minLength: 4)
@@ -49,15 +57,20 @@ struct AccountRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    /// 可用选中账号使用蓝色，不可用选中账号使用红色，其余账号保持中性图标。
+    /// 账号使用圆形图标，Key 使用方形图标；选择状态只由背景表达。
     @ViewBuilder
-    private var selectionIcon: some View {
-        if account.isActive {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title2)
-                .foregroundStyle(account.isAvailable ? Color.accentColor : Color.red)
+    private var connectionIcon: some View {
+        if account.isAPIKey {
+            Text("K")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .frame(width: 24, height: 24)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.orange, lineWidth: 1.5)
+                }
         } else {
-            Image(systemName: "person.crop.circle.fill")
+            Image(systemName: "person.crop.circle")
                 .font(.title2)
                 .foregroundStyle(.secondary)
         }
@@ -66,7 +79,7 @@ struct AccountRow: View {
     /// 只有当前选中行显示状态底色，避免额外的“直连”或“不可用”标签。
     private var selectionBackground: Color {
         guard account.isActive else { return .clear }
-        return account.isAvailable ? Color.accentColor.opacity(0.12) : Color.red.opacity(0.12)
+        return account.isAvailable ? Color.accentColor.opacity(0.16) : Color.red.opacity(0.15)
     }
 
     /// 分别展示实际存在的 5 小时窗口和始终存在的 7 天窗口。

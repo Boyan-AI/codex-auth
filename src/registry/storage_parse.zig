@@ -11,6 +11,8 @@ const parsePlanType = parse.parsePlanType;
 const parseRolloutSignature = parse.parseRolloutSignature;
 const parseUsage = parse.parseUsage;
 const readInt = parse.readInt;
+const ProviderKind = common.ProviderKind;
+const BalanceSnapshot = common.BalanceSnapshot;
 
 pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !AccountRecord {
     const account_key_val = obj.get("account_key") orelse return error.MissingAccountKey;
@@ -49,6 +51,9 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
         .last_usage_at = readInt(obj.get("last_usage_at")),
         .last_local_rollout = null,
         .smart_pool_enabled = parseSmartPoolEnabled(obj.get("smart_pool_enabled")),
+        .provider_kind = parseProviderKind(obj.get("provider_kind")),
+        .base_url = try parseOptionalStoredStringAlloc(allocator, obj.get("base_url")),
+        .balance_snapshot = try parseBalanceSnapshot(allocator, obj.get("balance_snapshot")),
     };
     errdefer freeAccountRecord(allocator, &rec);
 
@@ -89,4 +94,33 @@ fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json
     };
     if (text.len == 0) return null;
     return try allocator.dupe(u8, text);
+}
+
+fn parseProviderKind(value: ?std.json.Value) ?ProviderKind {
+    return switch (value orelse return null) {
+        .string => |s| if (std.mem.eql(u8, s, "openai")) .openai else if (std.mem.eql(u8, s, "relay")) .relay else null,
+        else => null,
+    };
+}
+
+fn parseBalanceSnapshot(allocator: std.mem.Allocator, value: ?std.json.Value) !?BalanceSnapshot {
+    const obj = switch (value orelse return null) {
+        .object => |item| item,
+        else => return null,
+    };
+    const amount = switch (obj.get("amount") orelse return null) {
+        .string => |s| try allocator.dupe(u8, s),
+        else => return null,
+    };
+    errdefer allocator.free(amount);
+    const currency = switch (obj.get("currency") orelse return null) {
+        .string => |s| try allocator.dupe(u8, s),
+        else => return null,
+    };
+    errdefer allocator.free(currency);
+    return .{
+        .amount = amount,
+        .currency = currency,
+        .updated_at = readInt(obj.get("updated_at")) orelse return null,
+    };
 }

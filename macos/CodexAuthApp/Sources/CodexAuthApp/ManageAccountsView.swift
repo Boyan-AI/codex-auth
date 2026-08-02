@@ -11,11 +11,21 @@ private enum AccountStatusFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// 统一连接列表的认证类型筛选。
+private enum ConnectionTypeFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case chatgpt = "账号"
+    case apikey = "Key"
+
+    var id: String { rawValue }
+}
+
 /// 在统一管理窗口中提供账号列表、详情和 sheet 操作。
 struct ManageAccountsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var searchText = ""
     @State private var selectedFilter: AccountStatusFilter = .all
+    @State private var selectedType: ConnectionTypeFilter = .all
     @State private var selectedSortOrder: AccountSortOrder = .added
     @State private var selectedAccountID: CodexAccount.ID?
     @State private var isAddingAccount = false
@@ -50,13 +60,11 @@ struct ManageAccountsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .searchable(text: $searchText, prompt: "搜索账号")
-        .navigationTitle("账号")
+        .searchable(text: $searchText, prompt: "搜索账号或 Key")
+        .navigationTitle("连接")
         .toolbar { accountToolbar }
         .sheet(isPresented: $isAddingAccount) {
-            AccountLoginSheet(title: "添加账号", initialAlias: "") { alias in
-                Task { await appState.login(alias: alias) }
-            }
+            AddConnectionSheet()
         }
         .sheet(item: $reloginAccount) { account in
             AccountLoginSheet(title: "重新登录", initialAlias: account.alias ?? "") { alias in
@@ -84,9 +92,18 @@ struct ManageAccountsView: View {
                 [account.primaryLabel, account.secondaryLabel, account.accountKey]
                 .joined(separator: " ")
                 .localizedCaseInsensitiveContains(searchText)
-            return matchesSearch && matchesFilter(account)
+            return matchesSearch && matchesType(account) && matchesFilter(account)
         }
         return AccountOrdering.sorted(filtered, by: selectedSortOrder)
+    }
+
+    /// 按统一连接模型筛选账号或 API Key。
+    private func matchesType(_ account: CodexAccount) -> Bool {
+        switch selectedType {
+        case .all: return true
+        case .chatgpt: return !account.isAPIKey
+        case .apikey: return account.isAPIKey
+        }
     }
 
     /// 将后端状态映射到可用、冷却、异常和已排除筛选。
@@ -113,10 +130,6 @@ struct ManageAccountsView: View {
                 Text(account.primaryLabel)
                     .lineLimit(1)
                 Spacer()
-                if account.isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(account.isAvailable ? Color.accentColor : Color.red)
-                }
             }
             Text(account.secondaryLabel)
                 .font(.caption)
@@ -130,6 +143,9 @@ struct ManageAccountsView: View {
 
     /// 合并列表中实际存在的 5 小时额度和 7 天额度。
     private func accountListUsage(_ account: CodexAccount) -> String {
+        if account.isAPIKey {
+            return account.balanceText.map { "余额 \($0)" } ?? "API Key"
+        }
         var parts: [String] = []
         if let fiveHour = account.usage.fiveHour {
             parts.append("5h \(fiveHour.displayText)")
@@ -145,6 +161,13 @@ struct ManageAccountsView: View {
             Picker("排序", selection: $selectedSortOrder) {
                 ForEach(AccountSortOrder.allCases) { order in
                     Text(order.rawValue).tag(order)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker("类型", selection: $selectedType) {
+                ForEach(ConnectionTypeFilter.allCases) { filter in
+                    Text(filter.rawValue).tag(filter)
                 }
             }
             .pickerStyle(.menu)
@@ -185,6 +208,101 @@ struct ManageAccountsView: View {
                 .font(.headline)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 统一添加入口，根据连接类型展示账号登录或 API Key 表单。
+private struct AddConnectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        AddConnectionForm(
+            onCancel: { dismiss() },
+            onAccount: { alias in
+                dismiss()
+                Task { await appState.login(alias: alias) }
+            },
+            onAPIKey: { alias, provider, baseURL, apiKey in
+                dismiss()
+                Task { await appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
+            }
+        )
+    }
+}
+
+/// 为管理页 sheet 和独立添加窗口提供一致的连接类型表单。
+struct AddConnectionForm: View {
+    let onCancel: () -> Void
+    let onAccount: (String?) -> Void
+    let onAPIKey: (String, APIKeyProvider, String, String) -> Void
+    @State private var connectionType = 0
+    @State private var alias = ""
+    @State private var provider: APIKeyProvider = .openai
+    @State private var baseURL = APIKeyProvider.openai.defaultBaseURL
+    @State private var apiKey = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("添加连接")
+                .font(.title2.weight(.semibold))
+            Picker("连接类型", selection: $connectionType) {
+                Text("ChatGPT 账号").tag(0)
+                Text("API Key").tag(1)
+            }
+            .pickerStyle(.segmented)
+
+            TextField("名称（可选）", text: $alias)
+                .textFieldStyle(.roundedBorder)
+
+            if connectionType == 1 {
+                Picker("服务商", selection: $provider) {
+                    ForEach(APIKeyProvider.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .onChange(of: provider) { value in baseURL = value.defaultBaseURL }
+                TextField("Base URL", text: $baseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(provider == .openai)
+                SecureField("API Key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                Text("余额仅在服务商支持且查询成功时显示。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("取消", action: onCancel)
+                Button(connectionType == 0 ? "继续登录" : "添加 Key") { submit() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(connectionType == 1 && !isKeyFormValid)
+            }
+        }
+        .padding(24)
+        .frame(width: 460, height: connectionType == 0 ? 220 : 360)
+    }
+
+    /// 校验 Key 表单的最小必填字段，后端继续负责安全 URL 校验。
+    private var isKeyFormValid: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 关闭表单后触发对应的异步添加流程。
+    private func submit() {
+        let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        if connectionType == 0 {
+            onAccount(trimmedAlias.isEmpty ? nil : trimmedAlias)
+        } else {
+            onAPIKey(
+                trimmedAlias,
+                provider,
+                baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
     }
 }
 
@@ -243,13 +361,22 @@ private struct AccountDetailView: View {
     /// 仅展示实际存在的 5 小时窗口，并始终展示 7 天和重置机会。
     private var quotaGrid: some View {
         Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 10) {
-            if let fiveHour = account.usage.fiveHour {
+            if account.isAPIKey {
+                if let balance = account.balanceText {
+                    GridRow { Text("余额"); Text(balance).foregroundStyle(.green) }
+                }
+                if let baseURL = account.baseURL {
+                    GridRow { Text("API 地址"); Text(baseURL).foregroundStyle(.secondary) }
+                }
+            } else if let fiveHour = account.usage.fiveHour {
                 GridRow { Text("5 小时"); Text(fiveHour.displayTextWithReset) }
-            }
-            GridRow { Text("7 天"); Text(account.usage.sevenDay.displayTextWithReset) }
-            GridRow {
-                Text("重置机会")
-                Text(account.resetCredits?.accountDetailText ?? "查询失败")
+                GridRow { Text("7 天"); Text(account.usage.sevenDay.displayTextWithReset) }
+                GridRow {
+                    Text("重置机会")
+                    Text(account.resetCredits?.accountDetailText ?? "查询失败")
+                }
+            } else {
+                GridRow { Text("7 天"); Text(account.usage.sevenDay.displayTextWithReset) }
             }
         }
     }
@@ -258,7 +385,7 @@ private struct AccountDetailView: View {
     private var routingControls: some View {
         VStack(spacing: 12) {
             HStack {
-                Text("直连账号")
+                Text(account.isAPIKey ? "直连 Key" : "直连账号")
                 Spacer()
                 Button(account.isActive ? "当前账号" : "设为当前") {
                     Task { await appState.switchAccount(accountKey: account.accountKey) }

@@ -176,24 +176,37 @@ final class AppState: ObservableObject {
 
     func login(alias: String? = nil) async {
         await load {
+            let previousActiveAccountKey = state?.activeAccountKey ?? state?.activeAccount?.accountKey
             let loggedInState = try await client.login()
             let trimmedAlias = alias?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let accountKey = loggedInState.activeAccountKey ?? loggedInState.activeAccount?.accountKey
+            var resultingState = loggedInState
             guard !trimmedAlias.isEmpty else {
                 notice = "已添加账号。"
-                if let accountKey {
-                    await synchronizeCPAAccount(accountKey: accountKey, enabled: true)
+                if let previousActiveAccountKey, previousActiveAccountKey != accountKey {
+                    resultingState = try await client.switchAccount(accountKey: previousActiveAccountKey)
                 }
-                return loggedInState
+                return resultingState
             }
             guard let accountKey else {
                 notice = "已添加账号。"
                 return loggedInState
             }
-            let renamedState = try await client.setAlias(accountKey: accountKey, alias: trimmedAlias)
+            resultingState = try await client.setAlias(accountKey: accountKey, alias: trimmedAlias)
             notice = "已添加账号并设置别名。"
-            await synchronizeCPAAccount(accountKey: accountKey, enabled: true)
-            return renamedState
+            if let previousActiveAccountKey, previousActiveAccountKey != accountKey {
+                resultingState = try await client.switchAccount(accountKey: previousActiveAccountKey)
+            }
+            return resultingState
+        }
+    }
+
+    /// 添加 API Key 连接；默认不切换当前直连，也不加入智能路由。
+    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async {
+        await load {
+            let state = try await client.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey)
+            notice = "已添加 API Key。"
+            return state
         }
     }
 
@@ -242,6 +255,20 @@ final class AppState: ObservableObject {
             } else {
                 cpaConnectionStatus = .unavailable
             }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 使用当前选中的连接启动直连 Codex，不改变 CPA 状态。
+    func openDirectCodexSession(at directoryPath: String) async {
+        guard let account = state?.activeAccount else {
+            errorMessage = "请先选择一个当前连接。"
+            return
+        }
+        errorMessage = nil
+        do {
+            try await client.openDirectCodexSession(at: directoryPath, account: account)
+        } catch {
             errorMessage = error.localizedDescription
         }
     }

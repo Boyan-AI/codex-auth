@@ -2,6 +2,34 @@ import XCTest
 @testable import CodexAuthApp
 
 final class CLIClientTests: XCTestCase {
+    /// 验证 API Key 仅通过环境变量传递，不出现在命令参数中。
+    func testClientAddsAPIKeyWithoutSecretArgument() async throws {
+        let output = #"{"schema_version":1,"codex_home":"/tmp/codex","active_account_key":null,"generated_at":"2026-06-29T12:00:00Z","refresh":{"attempted":false,"status":"skipped","message":null},"warnings":[],"accounts":[]}"#
+        let runner = RecordingCommandRunner(output: output)
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner
+        )
+
+        _ = try await client.addAPIKey(
+            alias: "Relay",
+            provider: .relay,
+            baseURL: "https://relay.example.com/v1",
+            apiKey: "sk-sensitive"
+        )
+
+        XCTAssertEqual(runner.calls.count, 1)
+        XCTAssertEqual(
+            runner.calls[0],
+            CommandCall(
+                executable: "/usr/local/bin/codex-auth",
+                arguments: ["gui", "add-key", "Relay", "relay", "https://relay.example.com/v1"],
+                environment: ["CODEX_AUTH_API_KEY": "sk-sensitive"]
+            )
+        )
+        XCTAssertFalse(runner.calls[0].arguments.contains("sk-sensitive"))
+    }
+
     func testClientBuildsStateCommand() async throws {
         let runner = RecordingCommandRunner(output: #"{"schema_version":1,"codex_home":"/tmp/codex","active_account_key":null,"generated_at":"2026-06-29T12:00:00Z","refresh":{"attempted":false,"status":"skipped","message":null},"warnings":[],"accounts":[]}"#)
         let client = CodexAuthCLIClient(executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"), runner: runner)
@@ -116,13 +144,22 @@ final class CLIClientTests: XCTestCase {
         XCTAssertEqual(runner.calls, [
             CommandCall(
                 executable: "/usr/local/bin/codex-auth",
-                arguments: ["gui", "cpa-sync", "acct-1", "include", "/tmp/cpa-auth"]
+                arguments: ["gui", "cpa-sync", "acct-1", "include", "/tmp/cpa-auth"],
+                environment: [
+                    "CODEX_AUTH_CPA_MANAGEMENT_KEY": "test-management-key",
+                    "CODEX_AUTH_CPA_MANAGEMENT_URL": "http://127.0.0.1:8317/v0/management/codex-api-key",
+                ]
             ),
             CommandCall(
                 executable: "/usr/local/bin/codex-auth",
-                arguments: ["gui", "cpa-sync", "acct-1", "exclude", "/tmp/cpa-auth"]
+                arguments: ["gui", "cpa-sync", "acct-1", "exclude", "/tmp/cpa-auth"],
+                environment: [
+                    "CODEX_AUTH_CPA_MANAGEMENT_KEY": "test-management-key",
+                    "CODEX_AUTH_CPA_MANAGEMENT_URL": "http://127.0.0.1:8317/v0/management/codex-api-key",
+                ]
             ),
         ])
+        XCTAssertFalse(runner.calls[0].arguments.joined(separator: " ").contains("test-management-key"))
     }
 
     /// 验证客户端把安装配置交给事件轮询器，不直接读取管理队列。
@@ -251,6 +288,26 @@ final class CLIClientTests: XCTestCase {
         XCTAssertFalse(runner.calls[0].arguments[1].contains("test-cpa-key"))
         XCTAssertEqual(runner.calls[0].environment, ["CODEX_AUTH_CPA_API_KEY": "test-cpa-key"])
         XCTAssertEqual(healthChecker.validatedConfigurations.count, 1)
+    }
+
+    /// 验证直连启动不会注入 CPA 密钥，并把中转站 provider 命令发送给 Ghostty。
+    func testClientOpensDirectRelaySessionWithoutSecretEnvironment() async throws {
+        let data = Data(#"{"account_key":"relay","display_name":"Relay","alias":null,"email":null,"account_name":"sk-test","plan":null,"auth_mode":"apikey","smart_pool_enabled":false,"provider_kind":"relay","base_url":"https://relay.example.com/v1","balance":null,"is_active":true,"usage":{"five_hour":null,"seven_day":{"status":"not_applicable","remaining_percent":null,"total":null,"used":null,"reset_at":null}},"last_usage_at":null,"last_refresh_at":null}"#.utf8)
+        let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: data)
+        let runner = RecordingCommandRunner(output: "")
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner,
+            fileExists: { $0.path == "/Applications/Ghostty.app" }
+        )
+
+        try await client.openDirectCodexSession(at: "/Users/me/project", account: account)
+
+        XCTAssertEqual(runner.calls.count, 1)
+        XCTAssertNil(runner.calls[0].environment)
+        XCTAssertTrue(runner.calls[0].arguments[1].contains("codex_auth_direct"))
+        XCTAssertFalse(runner.calls[0].arguments[1].contains("CODEX_AUTH_CPA_API_KEY"))
+        XCTAssertFalse(runner.calls[0].arguments[1].contains("environment variables"))
     }
 
     func testClientSurfacesGhosttyAppleScriptFailure() async {

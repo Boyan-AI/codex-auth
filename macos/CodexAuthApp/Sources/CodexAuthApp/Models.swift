@@ -17,6 +17,28 @@ enum CodexAuthAPIMode: Equatable {
     }
 }
 
+/// 映射后端支持的 API Key provider 类型。
+enum APIKeyProvider: String, CaseIterable, Identifiable {
+    case openai
+    case relay
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .openai: return "OpenAI 官方"
+        case .relay: return "兼容中转站"
+        }
+    }
+
+    var defaultBaseURL: String {
+        switch self {
+        case .openai: return "https://api.openai.com/v1"
+        case .relay: return ""
+        }
+    }
+}
+
 /// 区分菜单全量校验与 CPA 事件触发的增量 Token 文件扫描。
 enum TokenUsageScanMode: Equatable {
     case incremental
@@ -190,12 +212,31 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     let authMode: String?
     var resetCredits: ResetCreditsInfo? = nil
     let smartPoolEnabled: Bool?
+    var providerKind: String? = nil
+    var baseURL: String? = nil
+    var balance: BalanceSnapshot? = nil
     let isActive: Bool
     let usage: UsageInfo
     let lastUsageAt: Date?
     let lastRefreshAt: Date?
 
+    enum CodingKeys: String, CodingKey {
+        case accountKey, displayName, alias, email, accountName, plan, authMode
+        case resetCredits, smartPoolEnabled, providerKind, balance, isActive
+        case baseURL = "baseUrl"
+        case usage, lastUsageAt, lastRefreshAt
+    }
+
     var id: String { accountKey }
+
+    /// 判断统一连接列表中的 API Key 类型。
+    var isAPIKey: Bool { authMode?.lowercased() == "apikey" }
+
+    /// 返回余额连接的紧凑展示文案；没有成功余额时保持隐藏。
+    var balanceText: String? {
+        guard let balance else { return nil }
+        return "\(balance.amount) \(balance.currency)"
+    }
 
     /// 兼容尚未输出 schema 5 字段的旧 GUI 后端，缺失时默认加入智能池。
     var participatesInSmartPool: Bool {
@@ -204,7 +245,8 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
 
     /// 仅把存在有效周额度的账号视为可选择状态，错误文本继续原样展示。
     var isAvailable: Bool {
-        usage.sevenDay.status == "ok" && usage.sevenDay.remainingPercent != nil
+        if isAPIKey { return true }
+        return usage.sevenDay.status == "ok" && usage.sevenDay.remainingPercent != nil
     }
 
     var primaryLabel: String {
@@ -224,6 +266,9 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     }
 
     var secondaryLabel: String {
+        if isAPIKey {
+            return baseURL ?? email ?? "API Key"
+        }
         if let maskedEmail, !maskedEmail.isEmpty {
             return maskedEmail
         }
@@ -264,15 +309,18 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
 
     /// 返回可选的 5 小时用量文案；接口未提供该窗口时不生成占位内容。
     var fiveHourUsageText: String? {
-        usage.fiveHour?.displayTextWithReset
+        if isAPIKey { return nil }
+        return usage.fiveHour?.displayTextWithReset
     }
 
     var sevenDayUsageText: String {
-        usage.sevenDay.displayTextWithReset
+        if isAPIKey { return "" }
+        return usage.sevenDay.displayTextWithReset
     }
 
     /// 返回菜单栏 5 小时片段；窗口不存在时由展示层直接省略。
     var menuBarFiveHourText: String? {
+        if isAPIKey { return nil }
         guard let fiveHour = usage.fiveHour else {
             return nil
         }
@@ -280,7 +328,8 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     }
 
     var menuBarSevenDayText: String {
-        "7d \(usage.sevenDay.menuBarPercentText)"
+        if isAPIKey { return "" }
+        return "7d \(usage.sevenDay.menuBarPercentText)"
     }
 
     static func sample(accountKey: String, alias: String?, isActive: Bool) -> CodexAccount {
@@ -293,6 +342,9 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             plan: "pro",
             authMode: "chatgpt",
             smartPoolEnabled: true,
+            providerKind: nil,
+            baseURL: nil,
+            balance: nil,
             isActive: isActive,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 100, total: 100, used: 0, resetAt: nil),
@@ -302,6 +354,13 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             lastRefreshAt: nil
         )
     }
+}
+
+/// API Key provider 的最近一次余额结果；查询失败或不支持时由后端返回 null。
+struct BalanceSnapshot: Decodable, Equatable {
+    let amount: String
+    let currency: String
+    let updatedAt: Int64
 }
 
 /// 定义账号列表支持的稳定排序方式。

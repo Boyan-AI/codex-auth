@@ -115,6 +115,40 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.notice, "已添加账号并设置别名。")
     }
 
+    /// 验证已有当前连接时新增账号完成后恢复原当前连接。
+    func testLoginRestoresPreviousActiveConnection() async {
+        let original = CodexAccount.sample(accountKey: "acct-old", alias: "原账号", isActive: true)
+        let added = CodexAccount.sample(accountKey: "acct-new", alias: nil, isActive: true)
+        let initial = CodexAuthState(
+            schemaVersion: 1,
+            codexHome: "/tmp/codex",
+            activeAccountKey: "acct-old",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            refresh: RefreshInfo(attempted: false, status: "skipped", message: nil),
+            warnings: [],
+            accounts: [original]
+        )
+        let loggedIn = CodexAuthState(
+            schemaVersion: 1,
+            codexHome: "/tmp/codex",
+            activeAccountKey: "acct-new",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            refresh: RefreshInfo(attempted: false, status: "skipped", message: nil),
+            warnings: [],
+            accounts: [original, added]
+        )
+        let client = StubCodexAuthClient(state: initial)
+        client.loginState = loggedIn
+        client.switchState = initial
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        await appState.login(alias: "新账号")
+
+        XCTAssertEqual(client.setAliasAccountKey, "acct-new")
+        XCTAssertEqual(client.switchAccountKey, "acct-old")
+    }
+
     func testSetAliasUpdatesStateAndChineseMessage() async {
         let renamed = CodexAuthState(
             schemaVersion: 1,
@@ -426,6 +460,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var smartPoolState: CodexAuthState?
     var openedSessionDirectoryPath: String?
     var setAliasAccountKey: String?
+    var switchAccountKey: String?
     var setAliasValue: String?
     var smartPoolAccountKey: String?
     var smartPoolEnabled: Bool?
@@ -461,6 +496,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {
         switchCallCount += 1
+        switchAccountKey = accountKey
         if shouldDelaySwitch {
             await withCheckedContinuation { continuation in
                 switchContinuation = continuation

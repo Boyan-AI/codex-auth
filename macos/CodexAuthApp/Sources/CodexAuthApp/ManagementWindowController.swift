@@ -120,30 +120,31 @@ final class ManagementWindowController: NSObject, NSWindowDelegate {
         window?.attachedSheet?.orderOut(nil)
         window?.orderOut(nil)
 
-        let rootView = AccountLoginForm(
-            title: "添加账号",
-            initialAlias: "",
-            onCancel: { [weak self] in
-                self?.loginWindow?.orderOut(nil)
-            },
-            onConfirm: { [weak self] alias in
+        let rootView = AddConnectionForm(
+            onCancel: { [weak self] in self?.loginWindow?.orderOut(nil) },
+            onAccount: { [weak self] alias in
                 guard let self else { return }
                 self.loginWindow?.orderOut(nil)
                 Task { await self.appState.login(alias: alias) }
+            },
+            onAPIKey: { [weak self] alias, provider, baseURL, apiKey in
+                guard let self else { return }
+                self.loginWindow?.orderOut(nil)
+                Task { await self.appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
             }
         )
         let hostingController = NSHostingController(rootView: rootView)
 
         if let loginWindow {
             loginWindow.contentViewController = hostingController
-            loginWindow.setContentSize(NSSize(width: 420, height: 170))
+            loginWindow.setContentSize(NSSize(width: 460, height: 360))
             loginWindow.center()
             loginWindow.makeKeyAndOrderFront(nil)
         } else {
             let loginWindow = NSWindow(contentViewController: hostingController)
             loginWindow.title = "添加账号"
             loginWindow.styleMask = [.titled, .closable]
-            loginWindow.setContentSize(NSSize(width: 420, height: 170))
+            loginWindow.setContentSize(NSSize(width: 460, height: 360))
             loginWindow.center()
             loginWindow.isReleasedWhenClosed = false
             loginWindow.hidesOnDeactivate = false

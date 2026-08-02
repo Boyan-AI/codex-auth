@@ -8,6 +8,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
+pub const ProviderKind = enum { openai, relay };
 pub const current_schema_version: u32 = 5;
 pub const min_supported_schema_version: u32 = 2;
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
@@ -71,6 +72,13 @@ pub const RateLimitSnapshot = struct {
     plan_type: ?PlanType,
 };
 
+/// API Key 连接的最近一次余额结果；没有成功结果时保持 null，避免 UI 猜测余额。
+pub const BalanceSnapshot = struct {
+    amount: []u8,
+    currency: []u8,
+    updated_at: i64,
+};
+
 pub const RolloutSignature = struct {
     path: []u8,
     event_timestamp_ms: i64,
@@ -105,6 +113,10 @@ pub const AccountRecord = struct {
     last_local_rollout: ?RolloutSignature,
     /// 标记账号是否参与 CPA 智能路由池；旧记录缺失时默认加入。
     smart_pool_enabled: bool = true,
+    /// API Key 的非敏感 provider 元数据；密钥本身不进入 registry。
+    provider_kind: ?ProviderKind = null,
+    base_url: ?[]u8 = null,
+    balance_snapshot: ?BalanceSnapshot = null,
 };
 
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
@@ -168,6 +180,11 @@ pub fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord
     allocator.free(rec.email);
     allocator.free(rec.alias);
     if (rec.account_name) |account_name| allocator.free(account_name);
+    if (rec.base_url) |base_url| allocator.free(base_url);
+    if (rec.balance_snapshot) |snapshot| {
+        allocator.free(snapshot.amount);
+        allocator.free(snapshot.currency);
+    }
     if (rec.last_local_rollout) |*sig| freeRolloutSignature(allocator, sig);
     if (rec.last_usage) |*u| {
         freeRateLimitSnapshot(allocator, u);
@@ -219,6 +236,14 @@ pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitS
         .secondary = snapshot.secondary,
         .credits = cloned_credits,
         .plan_type = snapshot.plan_type,
+    };
+}
+
+pub fn cloneBalanceSnapshot(allocator: std.mem.Allocator, snapshot: BalanceSnapshot) !BalanceSnapshot {
+    return .{
+        .amount = try allocator.dupe(u8, snapshot.amount),
+        .currency = try allocator.dupe(u8, snapshot.currency),
+        .updated_at = snapshot.updated_at,
     };
 }
 

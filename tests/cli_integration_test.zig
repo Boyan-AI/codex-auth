@@ -359,6 +359,23 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     try file.chmod(0o755);
 }
 
+/// 写入只响应 CPA 管理 GET/PUT 的假 curl，并将 PUT 配置保存到隔离 HOME。
+fn writeCpaManagementFakeCurl(dir: fs.Dir) !void {
+    if (builtin.os.tag == .windows) return;
+    try dir.makePath("fake-cpa-bin");
+    const script =
+        "#!/bin/sh\n" ++
+        "CONFIG=$(cat)\n" ++
+        "case \"$CONFIG\" in\n" ++
+        "  *'request = \"PUT\"'*) printf '%s' \"$CONFIG\" > \"$HOME/cpa-put-config.txt\"; printf '{}\\n200' ;;\n" ++
+        "  *) printf '%s\\n200' '{\"codex-api-key\":[{\"api-key\":\"existing\",\"base-url\":\"https://existing.example/v1\",\"priority\":4,\"auth-index\":\"runtime-only\"}]}' ;;\n" ++
+        "esac\n";
+    try dir.writeFile(.{ .sub_path = "fake-cpa-bin/curl", .data = script });
+    var file = try dir.openFile("fake-cpa-bin/curl", .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o755);
+}
+
 fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "curl.exe" else "curl";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
@@ -450,6 +467,63 @@ fn runCliWithIsolatedHome(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
 
+    return try runCapture(allocator, project_root, &env_map, argv.items);
+}
+
+/// 在隔离 HOME 中附加单个敏感环境变量，验证密钥不会进入命令参数或机器输出。
+fn runCliWithIsolatedHomeAndSecret(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    secret_name: []const u8,
+    secret_value: []const u8,
+    args: []const []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put(secret_name, secret_value);
+    return try runCapture(allocator, project_root, &env_map, argv.items);
+}
+
+/// 在隔离 HOME 中附加 CPA 管理环境和 PATH，用于验证密钥同步不进入命令参数或输出。
+fn runCliWithIsolatedHomeAndCpaManagement(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    management_url: []const u8,
+    management_key: []const u8,
+    args: []const []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_CPA_MANAGEMENT_URL", management_url);
+    try env_map.put("CODEX_AUTH_CPA_MANAGEMENT_KEY", management_key);
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
@@ -1708,6 +1782,135 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     const refreshed_again_api_idx = registry.findAccountIndexByAccountKey(&refreshed_again, api_account_key) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(f64, 88), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 66), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.secondary.?.used_percent);
+}
+
+test "Scenario: Given relay API key when adding from GUI then secret stays only in protected snapshot" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const api_key = "sk-sensitive-relay";
+
+    const result = try runCliWithIsolatedHomeAndSecret(
+        gpa,
+        project_root,
+        home_root,
+        "CODEX_AUTH_API_KEY",
+        api_key,
+        &[_][]const u8{ "gui", "add-key", "Relay", "relay", "https://relay.example.com/v1" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("gui add relay key", result);
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, api_key) == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"provider_kind\":\"relay\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"base_url\":\"https://relay.example.com/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"smart_pool_enabled\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"is_active\":false") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key == null);
+    const record = &loaded.accounts.items[0];
+    try std.testing.expectEqual(registry.AuthMode.apikey, record.auth_mode.?);
+    try std.testing.expectEqual(registry.ProviderKind.relay, record.provider_kind.?);
+    try std.testing.expectEqualStrings("https://relay.example.com/v1", record.base_url.?);
+    try std.testing.expect(!record.smart_pool_enabled);
+
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record.account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot = try fixtures.readFileAlloc(gpa, snapshot_path);
+    defer gpa.free(snapshot);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, api_key) != null);
+
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    const registry_data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(registry_data);
+    try std.testing.expect(std.mem.indexOf(u8, registry_data, api_key) == null);
+}
+
+test "Scenario: Given API key in smart pool when syncing CPA then management PUT receives merged keys without leaking secrets" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try writeCpaManagementFakeCurl(tmp.dir);
+
+    const fake_cpa_dir = try tmp.dir.realpathAlloc(gpa, "fake-cpa-bin");
+    defer gpa.free(fake_cpa_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_cpa_dir);
+    defer gpa.free(path_override);
+
+    const api_key = "sk-cpa-sync-secret";
+    const management_key = "cpa-management-secret";
+    const add_result = try runCliWithIsolatedHomeAndSecret(
+        gpa,
+        project_root,
+        home_root,
+        "CODEX_AUTH_API_KEY",
+        api_key,
+        &[_][]const u8{ "gui", "add-key", "Relay", "relay", "https://relay.example.com/v1" },
+    );
+    defer gpa.free(add_result.stdout);
+    defer gpa.free(add_result.stderr);
+    try expectSuccess(add_result);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const account_key = try gpa.dupe(u8, loaded.accounts.items[0].account_key);
+    defer gpa.free(account_key);
+
+    const include_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "gui", "smart-pool", account_key, "include" });
+    defer gpa.free(include_result.stdout);
+    defer gpa.free(include_result.stderr);
+    try expectSuccess(include_result);
+
+    const sync_result = try runCliWithIsolatedHomeAndCpaManagement(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        "http://127.0.0.1:8317/v0/management/codex-api-key",
+        management_key,
+        &[_][]const u8{ "gui", "cpa-sync", account_key, "include", "/tmp/cpa-auth" },
+    );
+    defer gpa.free(sync_result.stdout);
+    defer gpa.free(sync_result.stderr);
+    try expectSuccess(sync_result);
+    try std.testing.expect(std.mem.indexOf(u8, sync_result.stdout, api_key) == null);
+    try std.testing.expect(std.mem.indexOf(u8, sync_result.stderr, api_key) == null);
+    try std.testing.expect(std.mem.indexOf(u8, sync_result.stderr, management_key) == null);
+
+    const put_config_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "cpa-put-config.txt" });
+    defer gpa.free(put_config_path);
+    const put_config = try fixtures.readFileAlloc(gpa, put_config_path);
+    defer gpa.free(put_config);
+    try std.testing.expect(std.mem.indexOf(u8, put_config, api_key) != null);
+    try std.testing.expect(std.mem.indexOf(u8, put_config, management_key) != null);
+    try std.testing.expect(std.mem.indexOf(u8, put_config, "priority") != null);
+    try std.testing.expect(std.mem.indexOf(u8, put_config, "auth-index") == null);
 }
 
 test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {

@@ -4,6 +4,9 @@ const cli = @import("../cli/root.zig");
 const io_util = @import("../core/io_util.zig");
 const registry = @import("../registry/root.zig");
 const usage_api = @import("../api/usage.zig");
+const me_api = @import("../api/me.zig");
+const cpa_management = @import("../api/cpa_management.zig");
+const auth_api = @import("../auth/auth.zig");
 const live_flow = @import("live.zig");
 const login_workflow = @import("login.zig");
 const usage_refresh = @import("usage.zig");
@@ -23,14 +26,112 @@ pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli
         .alias => |alias_opts| try handleAlias(allocator, codex_home, alias_opts),
         .smart_pool => |pool_opts| try handleSmartPool(allocator, codex_home, pool_opts),
         .cpa_sync => |sync_opts| try handleCpaSync(allocator, codex_home, sync_opts),
+        .add_api_key => |add_opts| try handleAddApiKey(allocator, codex_home, add_opts),
     }
+}
+
+/// 从受保护环境变量创建 API Key 认证快照；不切换活动直连连接，也不自动加入 CPA。
+fn handleAddApiKey(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiAddApiKeyOptions) !void {
+    const api_key = try registry.getNonEmptyEnvVarOwned(allocator, "CODEX_AUTH_API_KEY");
+    defer if (api_key) |value| allocator.free(value);
+    const key = api_key orelse return error.MissingOpenAIAPIKey;
+    const normalized_base_url = try normalizeApiKeyBaseURLAlloc(allocator, opts.provider, opts.base_url);
+    defer allocator.free(normalized_base_url);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    var record = switch (opts.provider) {
+        .openai => blk: {
+            const endpoint = try apiKeyMeEndpointAlloc(allocator, normalized_base_url);
+            defer allocator.free(endpoint);
+            var me = try me_api.fetchMeForApiKeyFromEndpoint(allocator, endpoint, key);
+            defer me.deinit(allocator);
+            break :blk try registry.accountFromApiKeyDetails(allocator, opts.alias, key, &me);
+        },
+        .relay => try registry.accountFromApiKeyConnection(allocator, opts.alias, key, normalized_base_url),
+    };
+    var record_owned = true;
+    errdefer if (record_owned) registry.freeAccountRecord(allocator, &record);
+    record.provider_kind = switch (opts.provider) {
+        .openai => .openai,
+        .relay => .relay,
+    };
+    record.base_url = try allocator.dupe(u8, normalized_base_url);
+    record.smart_pool_enabled = false;
+
+    var auth_json: std.Io.Writer.Allocating = .init(allocator);
+    defer auth_json.deinit();
+    try auth_json.writer.writeAll("{\"OPENAI_API_KEY\":");
+    try std.json.Stringify.value(key, .{}, &auth_json.writer);
+    try auth_json.writer.writeAll("}");
+    const auth_path = try registry.accountAuthPath(allocator, codex_home, record.account_key);
+    defer allocator.free(auth_path);
+    try registry.ensureAccountsDir(allocator, codex_home);
+    try registry.writeFile(auth_path, auth_json.written());
+    try registry.upsertAccount(allocator, &reg, record);
+    record_owned = false;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
+}
+
+/// 规范化 Key provider 地址；远程中转站必须使用 HTTPS，本机开发地址允许 HTTP。
+fn normalizeApiKeyBaseURLAlloc(
+    allocator: std.mem.Allocator,
+    provider: cli.types.ApiKeyProvider,
+    raw_base_url: []const u8,
+) ![]u8 {
+    const trimmed = std.mem.trim(u8, raw_base_url, &std.ascii.whitespace);
+    const without_trailing_slash = std.mem.trimEnd(u8, trimmed, "/");
+    if (without_trailing_slash.len == 0) return error.InvalidBaseURL;
+    if (provider == .openai) {
+        if (!std.mem.eql(u8, without_trailing_slash, "https://api.openai.com/v1")) return error.InvalidBaseURL;
+        return allocator.dupe(u8, without_trailing_slash);
+    }
+
+    const uri = std.Uri.parse(without_trailing_slash) catch return error.InvalidBaseURL;
+    if (uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return error.InvalidBaseURL;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = std.Uri.getHost(uri, &host_buffer) catch return error.InvalidBaseURL;
+    const is_local = std.ascii.eqlIgnoreCase(host.bytes, "localhost") or
+        std.mem.eql(u8, host.bytes, "127.0.0.1") or
+        std.mem.eql(u8, host.bytes, "::1");
+    const is_https = std.ascii.eqlIgnoreCase(uri.scheme, "https");
+    const is_local_http = is_local and std.ascii.eqlIgnoreCase(uri.scheme, "http");
+    if (!is_https and !is_local_http) return error.InvalidBaseURL;
+    return allocator.dupe(u8, without_trailing_slash);
+}
+
+/// 由 provider base URL 构造身份端点，统一移除尾部斜杠。
+fn apiKeyMeEndpointAlloc(allocator: std.mem.Allocator, base_url: []const u8) ![]u8 {
+    const trimmed = std.mem.trimEnd(u8, base_url, "/");
+    if (trimmed.len == 0) return error.InvalidBaseURL;
+    return std.fmt.allocPrint(allocator, "{s}/me", .{trimmed});
 }
 
 /// 将单个账号复制到或移出独立 CPA 认证目录，不修改官方 Codex 活动凭据。
 fn handleCpaSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaSyncOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    try registry.syncCpaAccount(allocator, codex_home, &reg, opts.account_key, opts.auth_dir, opts.enabled);
+    const idx = registry.findAccountIndexByAccountKey(&reg, opts.account_key) orelse return error.AccountNotFound;
+    const record = &reg.accounts.items[idx];
+    if (opts.enabled and !record.smart_pool_enabled) return error.AccountExcludedFromSmartPool;
+    if (record.auth_mode != null and record.auth_mode.? == .apikey) {
+        const management_url = try registry.getNonEmptyEnvVarOwned(allocator, "CODEX_AUTH_CPA_MANAGEMENT_URL");
+        defer if (management_url) |value| allocator.free(value);
+        const management_key = try registry.getNonEmptyEnvVarOwned(allocator, "CODEX_AUTH_CPA_MANAGEMENT_KEY");
+        defer if (management_key) |value| allocator.free(value);
+        const endpoint = management_url orelse return error.MissingCpaManagementURL;
+        const key = management_key orelse return error.MissingCpaManagementKey;
+        const auth_path = try registry.accountAuthPath(allocator, codex_home, record.account_key);
+        defer allocator.free(auth_path);
+        const info = try auth_api.parseAuthInfo(allocator, auth_path);
+        defer info.deinit(allocator);
+        const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
+        const base_url = record.base_url orelse return error.InvalidBaseURL;
+        try cpa_management.syncCodexApiKey(allocator, endpoint, key, api_key, base_url, opts.enabled);
+    } else {
+        try registry.syncCpaAccount(allocator, codex_home, &reg, opts.account_key, opts.auth_dir, opts.enabled);
+    }
 
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -205,9 +306,22 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, account_ke
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
+    var before = try registry.loadRegistry(allocator, codex_home);
+    defer before.deinit(allocator);
+    var known_keys = std.StringHashMap(void).init(allocator);
+    defer known_keys.deinit();
+    for (before.accounts.items) |account| try known_keys.put(account.account_key, {});
+
     try login_workflow.handleLogin(allocator, codex_home, opts);
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
+    if (reg.active_account_key) |logged_in_key| {
+        if (!known_keys.contains(logged_in_key)) {
+            const idx = registry.findAccountIndexByAccountKey(&reg, logged_in_key) orelse return error.AccountNotFound;
+            reg.accounts.items[idx].smart_pool_enabled = false;
+        }
+    }
+    try registry.saveRegistry(allocator, codex_home, &reg);
     try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
 }
 
@@ -334,6 +448,18 @@ fn writeAccountJson(
         try out.writeAll("null");
     }
     try out.print(",\"smart_pool_enabled\":{}", .{rec.smart_pool_enabled});
+    try out.writeAll(",\"provider_kind\":");
+    if (rec.provider_kind) |kind| try writeJsonString(out, @tagName(kind)) else try out.writeAll("null");
+    try out.writeAll(",\"base_url\":");
+    try writeOptionalJsonString(out, rec.base_url);
+    try out.writeAll(",\"balance\":");
+    if (rec.balance_snapshot) |snapshot| {
+        try out.writeAll("{\"amount\":");
+        try writeJsonString(out, snapshot.amount);
+        try out.writeAll(",\"currency\":");
+        try writeJsonString(out, snapshot.currency);
+        try out.print(",\"updated_at\":{d}}}", .{snapshot.updated_at});
+    } else try out.writeAll("null");
     const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, rec.account_key) else false;
     try out.print(",\"is_active\":{},", .{is_active});
     try out.writeAll("\"usage\":{");

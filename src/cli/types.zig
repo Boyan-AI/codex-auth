@@ -101,6 +101,12 @@ pub const GuiCpaSyncOptions = struct {
     auth_dir: []u8,
     enabled: bool,
 };
+pub const ApiKeyProvider = enum { openai, relay };
+pub const GuiAddApiKeyOptions = struct {
+    alias: []u8,
+    provider: ApiKeyProvider,
+    base_url: []u8,
+};
 pub const GuiOptions = union(enum) {
     state: GuiStateOptions,
     refresh: GuiStateOptions,
@@ -112,6 +118,7 @@ pub const GuiOptions = union(enum) {
     alias: GuiAliasOptions,
     smart_pool: GuiSmartPoolOptions,
     cpa_sync: GuiCpaSyncOptions,
+    add_api_key: GuiAddApiKeyOptions,
 };
 pub const HelpTopic = enum {
     top_level,

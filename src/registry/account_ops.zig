@@ -617,6 +617,16 @@ pub fn accountFromApiKeyMe(
     me: *const me_api.MeResult,
 ) !AccountRecord {
     const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
+    return accountFromApiKeyDetails(allocator, alias, api_key, me);
+}
+
+/// 根据已验证的 API Key 身份创建连接记录，调用方负责单独保存密钥快照。
+pub fn accountFromApiKeyDetails(
+    allocator: std.mem.Allocator,
+    alias: []const u8,
+    api_key: []const u8,
+    me: *const me_api.MeResult,
+) !AccountRecord {
     const owned_record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
     errdefer allocator.free(owned_record_key);
     const owned_user_id = try allocator.dupe(u8, me.user_id);
@@ -634,6 +644,49 @@ pub fn accountFromApiKeyMe(
         .account_key = owned_record_key,
         .chatgpt_account_id = owned_chatgpt_account_id,
         .chatgpt_user_id = owned_user_id,
+        .email = owned_email,
+        .alias = owned_alias,
+        .account_name = owned_account_name,
+        .plan = null,
+        .auth_mode = .apikey,
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    };
+}
+
+/// 为不支持身份端点的兼容中转站创建稳定连接记录，密钥和地址共同决定连接标识。
+pub fn accountFromApiKeyConnection(
+    allocator: std.mem.Allocator,
+    alias: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+) !AccountRecord {
+    var provider_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(base_url, &provider_digest, .{});
+    const provider_hex = std.fmt.bytesToHex(provider_digest, .lower);
+    const provider_id = try std.fmt.allocPrint(allocator, "relay-{s}", .{provider_hex[0..16]});
+    defer allocator.free(provider_id);
+
+    const owned_record_key = try apiKeyAccountKeyAlloc(allocator, provider_id, api_key);
+    errdefer allocator.free(owned_record_key);
+    const owned_provider_id = try allocator.dupe(u8, provider_id);
+    errdefer allocator.free(owned_provider_id);
+    const owned_email = try allocator.dupe(u8, "");
+    errdefer allocator.free(owned_email);
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
+    const owned_account_name = try apiKeyAccountNameAlloc(allocator, api_key);
+    errdefer allocator.free(owned_account_name);
+    const owned_chatgpt_account_id = try allocator.dupe(u8, "");
+    errdefer allocator.free(owned_chatgpt_account_id);
+
+    return .{
+        .account_key = owned_record_key,
+        .chatgpt_account_id = owned_chatgpt_account_id,
+        .chatgpt_user_id = owned_provider_id,
         .email = owned_email,
         .alias = owned_alias,
         .account_name = owned_account_name,

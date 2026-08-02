@@ -348,6 +348,34 @@ enum CodexSmartLaunchCommand {
     }
 }
 
+/// 生成只对本次直连 Codex 进程生效的 provider 参数。
+enum CodexDirectLaunchCommand {
+    /// 官方账号和官方 Key 直接使用当前 auth.json；中转站使用自定义 provider 并复用当前 OpenAI 认证。
+    static func build(account: CodexAccount) -> String {
+        guard account.isAPIKey,
+              account.providerKind?.lowercased() == APIKeyProvider.relay.rawValue,
+              let baseURL = account.baseURL,
+              !baseURL.isEmpty
+        else {
+            return "codex resume --last"
+        }
+        let overrides = [
+            #"model_provider="codex_auth_direct""#,
+            #"model_providers.codex_auth_direct.name="Codex Auth Direct""#,
+            #"model_providers.codex_auth_direct.base_url="\#(baseURL)""#,
+            #"model_providers.codex_auth_direct.requires_openai_auth=true"#,
+            #"model_providers.codex_auth_direct.wire_api="responses""#,
+        ]
+        let arguments = overrides.flatMap { ["-c", shellQuote($0)] }
+        return (["codex"] + arguments + ["resume", "--last"]).joined(separator: " ")
+    }
+
+    /// 使用 POSIX 单引号保护单次配置参数中的特殊字符。
+    private static func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+}
+
 private extension String {
     /// 将空白字符串规整为 nil，避免把空密钥或目录当成已配置。
     var nilIfEmpty: String? {

@@ -2,6 +2,36 @@ import XCTest
 @testable import CodexAuthApp
 
 final class ModelsTests: XCTestCase {
+    func testAPIKeyConnectionUsesBalanceAndDoesNotRequireQuotaWindows() throws {
+        let json = Data("""
+        {
+          "account_key": "key-relay",
+          "display_name": "AI 系统",
+          "alias": "AI 系统",
+          "email": "api.example.com",
+          "account_name": null,
+          "plan": null,
+          "auth_mode": "apikey",
+          "smart_pool_enabled": false,
+          "provider_kind": "relay",
+          "base_url": "https://api.example.com/v1",
+          "balance": {"amount": "999.98", "currency": "USD", "updated_at": 100},
+          "is_active": true,
+          "usage": {"five_hour": null, "seven_day": {"status": "unsupported", "remaining_percent": null, "total": null, "used": null, "reset_at": null}},
+          "last_usage_at": null,
+          "last_refresh_at": null
+        }
+        """.utf8)
+
+        let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: json)
+        XCTAssertTrue(account.isAPIKey)
+        XCTAssertEqual(account.balanceText, "999.98 USD")
+        XCTAssertEqual(account.providerKind, "relay")
+        XCTAssertEqual(account.baseURL, "https://api.example.com/v1")
+        XCTAssertTrue(account.isAvailable)
+        XCTAssertNil(account.fiveHourUsageText)
+    }
+
     func testDecodesGuiStateAndDerivesChineseLabels() throws {
         let json = """
         {
