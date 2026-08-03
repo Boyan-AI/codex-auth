@@ -86,3 +86,7 @@ Execution Mode: solo
 - 直连账号 → Key → 账号在当前代码版本已有同日真实 HTTP 200 闭环证据；本轮只确认当前 Key 已失效，不能把历史成功冒充本轮成功。
 - CPA Key → 账号的重新选择与 HTTP 200 闭环已有同日真实证据；账号 → Key 的重新选择已有日志证据，但最终成功响应仍被 Key 401 阻断。
 - 本轮没有修改真实直连认证、活动连接、CPA 账号池或 CPA Key 列表，没有新增测试 Key 残留。
+
+## 结论修正
+- 后续使用 CC-switch 当前 `wire_api = "responses"` 配置实测，AgentRouter `/v1/responses` 返回 200；此前仅凭 `/v1/models` 的 401 判断 Key 失效不成立。
+- 账号→Key 的 CPA 路由重选仍成功，但该次 CPA 转发请求返回 401；直连同一当前 Key 的 Responses 请求返回 200，因此两者应区分为“选择器通过、CPA 上游请求兼容性待修复”。
