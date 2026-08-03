@@ -202,10 +202,15 @@ final class AppState: ObservableObject {
     }
 
     /// 添加 API Key 连接；默认不切换当前直连，也不加入智能路由。
-    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async {
+    /// 添加 API Key；默认只保存直连连接，用户明确选择后才加入 CPA 智能池。
+    func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String, includeInSmartPool: Bool = false) async {
         await load {
-            let state = try await client.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey)
-            notice = "已添加 API Key。"
+            var state = try await client.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey)
+            notice = includeInSmartPool ? "已添加 API Key 并加入智能路由。" : "已添加 API Key。默认未加入智能路由。"
+            if includeInSmartPool, let account = state.accounts.first(where: { $0.isAPIKey && $0.baseURL == baseURL }) {
+                state = try await client.setSmartPoolEnabled(accountKey: account.accountKey, enabled: true)
+                await synchronizeCPAAccount(accountKey: account.accountKey, enabled: true)
+            }
             return state
         }
     }

@@ -223,9 +223,9 @@ private struct AddConnectionSheet: View {
                 dismiss()
                 Task { await appState.login(alias: alias) }
             },
-            onAPIKey: { alias, provider, baseURL, apiKey in
+            onAPIKey: { alias, provider, baseURL, apiKey, includeInSmartPool in
                 dismiss()
-                Task { await appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
+                Task { await appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey, includeInSmartPool: includeInSmartPool) }
             }
         )
     }
@@ -235,12 +235,13 @@ private struct AddConnectionSheet: View {
 struct AddConnectionForm: View {
     let onCancel: () -> Void
     let onAccount: (String?) -> Void
-    let onAPIKey: (String, APIKeyProvider, String, String) -> Void
+    let onAPIKey: (String, APIKeyProvider, String, String, Bool) -> Void
     @State private var connectionType = 0
     @State private var alias = ""
     @State private var provider: APIKeyProvider = .openai
     @State private var baseURL = APIKeyProvider.openai.defaultBaseURL
     @State private var apiKey = ""
+    @State private var includeInSmartPool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -267,6 +268,10 @@ struct AddConnectionForm: View {
                     .disabled(provider == .openai)
                 SecureField("API Key", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
+                Toggle("加入智能路由（默认关闭）", isOn: $includeInSmartPool)
+                Text("部分中转服务不兼容 CPA 代理转发；加入后请求失败不一定会自动切换到其他账号。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text("余额仅在服务商支持且查询成功时显示。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -300,7 +305,8 @@ struct AddConnectionForm: View {
                 trimmedAlias,
                 provider,
                 baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                includeInSmartPool
             )
         }
     }

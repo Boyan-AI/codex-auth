@@ -127,10 +127,10 @@ final class ManagementWindowController: NSObject, NSWindowDelegate {
                 self.loginWindow?.orderOut(nil)
                 Task { await self.appState.login(alias: alias) }
             },
-            onAPIKey: { [weak self] alias, provider, baseURL, apiKey in
+            onAPIKey: { [weak self] alias, provider, baseURL, apiKey, includeInSmartPool in
                 guard let self else { return }
                 self.loginWindow?.orderOut(nil)
-                Task { await self.appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
+                Task { await self.appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey, includeInSmartPool: includeInSmartPool) }
             }
         )
         let hostingController = NSHostingController(rootView: rootView)
