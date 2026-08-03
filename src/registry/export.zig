@@ -22,6 +22,11 @@ pub const ExportSummary = struct {
     }
 };
 
+pub const CpaReconcileSummary = struct {
+    synced: usize,
+    removed: usize,
+};
+
 pub fn defaultExportDirectory(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "backup" });
 }
@@ -133,6 +138,58 @@ pub fn syncCpaAccount(
     const src = try accountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
     try exportCpaFile(allocator, src, dest);
+}
+
+/// 将 App 专用 CPA 认证目录收敛到注册表中启用的 ChatGPT 智能池成员。
+pub fn reconcileCpaAccounts(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+    auth_dir: []const u8,
+) !CpaReconcileSummary {
+    try ensurePrivateDir(auth_dir);
+
+    var dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), auth_dir, .{ .iterate = true });
+    var removed: usize = 0;
+    {
+        defer dir.close(app_runtime.io());
+        var iterator = dir.iterate();
+        while (try iterator.next(app_runtime.io())) |entry| {
+            if (entry.kind != .file and entry.kind != .sym_link) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
+            if (try isExpectedCpaFileName(allocator, reg, entry.name)) continue;
+            try dir.deleteFile(app_runtime.io(), entry.name);
+            removed += 1;
+        }
+    }
+
+    var synced: usize = 0;
+    for (reg.accounts.items) |record| {
+        if (!record.smart_pool_enabled) continue;
+        if (record.auth_mode != null and record.auth_mode.? == .apikey) continue;
+        try syncCpaAccount(allocator, codex_home, reg, record.account_key, auth_dir, true);
+        synced += 1;
+    }
+
+    return .{ .synced = synced, .removed = removed };
+}
+
+/// 判断文件名是否属于启用的 ChatGPT 智能池账号；API Key 不使用认证目录。
+fn isExpectedCpaFileName(
+    allocator: std.mem.Allocator,
+    reg: *const Registry,
+    file_name: []const u8,
+) !bool {
+    for (reg.accounts.items) |record| {
+        if (!record.smart_pool_enabled) continue;
+        if (record.auth_mode != null and record.auth_mode.? == .apikey) continue;
+        const base_name = try accountSnapshotFileName(allocator, record.account_key);
+        defer allocator.free(base_name);
+        const expected_name = try cpaExportFileName(allocator, base_name);
+        defer allocator.free(expected_name);
+        if (std.mem.eql(u8, expected_name, file_name)) return true;
+    }
+    return false;
 }
 
 /// 全量智能池导出时移除已知且明确排除的旧副本，未知文件保持不变。

@@ -245,6 +245,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui alias clear <account-key>\n");
             try out.writeAll("  codex-auth gui smart-pool <account-key> include|exclude\n");
             try out.writeAll("  codex-auth gui cpa-sync <account-key> include|exclude <auth-dir>\n");
+            try out.writeAll("  codex-auth gui cpa-sync reconcile <auth-dir>\n");
             try out.writeAll("  codex-auth gui import <path> [--alias <alias>]\n");
             try out.writeAll("  codex-auth gui login [--device-auth]\n");
         },
@@ -422,6 +423,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui refresh --api\n");
             try out.writeAll("  codex-auth gui stats --full\n");
             try out.writeAll("  codex-auth gui switch user::account\n");
+            try out.writeAll("  codex-auth gui cpa-sync reconcile /path/to/cpa-auth\n");
         },
     }
 }

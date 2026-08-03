@@ -27,6 +27,7 @@ protocol CodexAuthClientProtocol {
     func clearAlias(accountKey: String) async throws -> CodexAuthState
     func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws
+    func reconcileCPAAccounts() async throws
     func login() async throws -> CodexAuthState
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState
@@ -54,6 +55,9 @@ extension CodexAuthClientProtocol {
 
     /// 兼容尚未实现 CPA 凭据同步的替代客户端。
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws {}
+
+    /// 兼容尚未实现 CPA 全目录对账的替代客户端。
+    func reconcileCPAAccounts() async throws {}
 
     /// 未实现 Key 创建的替代客户端返回明确错误。
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState {
@@ -217,6 +221,20 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         try await runVoidCommand([
             "gui", "cpa-sync", accountKey, enabled ? "include" : "exclude", authDirectoryPath,
         ], environment: environment.isEmpty ? nil : environment)
+    }
+
+    /// 将 CPA 专用认证目录收敛到当前注册表智能池，不传递管理密钥或认证内容。
+    func reconcileCPAAccounts() async throws {
+        let configuration: CPAConfiguration
+        do {
+            configuration = try cpaConfigurationProvider.load()
+        } catch CPARuntimeError.missingInstalledConfiguration {
+            return
+        }
+        guard let authDirectoryPath = configuration.authDirectoryPath else {
+            throw CPARuntimeError.missingAuthDirectory
+        }
+        try await runVoidCommand(["gui", "cpa-sync", "reconcile", authDirectoryPath])
     }
 
     func login() async throws -> CodexAuthState {

@@ -2104,3 +2104,73 @@ test "smart pool export and single account sync preserve routing membership" {
     try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, false);
     try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
 }
+
+// 验证 CPA 专用认证目录严格收敛到智能池 ChatGPT 成员，同时保留非 JSON 文件。
+test "reconcile cpa auth directory removes orphan excluded and api key json files" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+    try tmp.dir.makePath("cpa-auth");
+
+    const emails = [_][]const u8{
+        "included@example.com",
+        "excluded@example.com",
+        "api-key@example.com",
+    };
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    for (emails) |email| {
+        const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, email, "plus");
+        defer gpa.free(cpa_json);
+        const import_name = try std.fmt.allocPrint(gpa, "imports/{s}.json", .{email});
+        defer gpa.free(import_name);
+        try tmp.dir.writeFile(.{ .sub_path = import_name, .data = cpa_json });
+        const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, import_name });
+        defer gpa.free(import_path);
+        var report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+        defer report.deinit(gpa);
+    }
+    reg.accounts.items[1].smart_pool_enabled = false;
+    reg.accounts.items[2].smart_pool_enabled = true;
+    reg.accounts.items[2].auth_mode = .apikey;
+
+    const auth_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "cpa-auth" });
+    defer gpa.free(auth_dir);
+    for (reg.accounts.items) |record| {
+        const snapshot_name = try registry.accountSnapshotFileName(gpa, record.account_key);
+        defer gpa.free(snapshot_name);
+        const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{
+            snapshot_name[0 .. snapshot_name.len - ".auth.json".len],
+            ".json",
+        });
+        defer gpa.free(cpa_name);
+        const stale_path = try fs.path.join(gpa, &[_][]const u8{ "cpa-auth", cpa_name });
+        defer gpa.free(stale_path);
+        try tmp.dir.writeFile(.{ .sub_path = stale_path, .data = "stale" });
+    }
+    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/orphan.json", .data = "orphan" });
+    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/README.txt", .data = "keep" });
+
+    const summary = try registry.reconcileCpaAccounts(gpa, codex_home, &reg, auth_dir);
+
+    try std.testing.expectEqual(@as(usize, 1), summary.synced);
+    try std.testing.expectEqual(@as(usize, 3), summary.removed);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile("cpa-auth/orphan.json"));
+    _ = try tmp.dir.statFile("cpa-auth/README.txt");
+    const included_name = try registry.accountSnapshotFileName(gpa, reg.accounts.items[0].account_key);
+    defer gpa.free(included_name);
+    const included_cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{
+        included_name[0 .. included_name.len - ".auth.json".len],
+        ".json",
+    });
+    defer gpa.free(included_cpa_name);
+    const included_path = try fs.path.join(gpa, &[_][]const u8{ auth_dir, included_cpa_name });
+    defer gpa.free(included_path);
+    const included_data = try fixtures.readFileAlloc(gpa, included_path);
+    defer gpa.free(included_data);
+    try std.testing.expect(std.mem.indexOf(u8, included_data, "refresh-included@example.com") != null);
+}

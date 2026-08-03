@@ -108,8 +108,16 @@ fn apiKeyMeEndpointAlloc(allocator: std.mem.Allocator, base_url: []const u8) ![]
     return std.fmt.allocPrint(allocator, "{s}/me", .{trimmed});
 }
 
-/// 将单个账号复制到或移出独立 CPA 认证目录，不修改官方 Codex 活动凭据。
+/// 分发单账号 CPA 同步与专用认证目录全量对账。
 fn handleCpaSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaSyncOptions) !void {
+    switch (opts) {
+        .account => |account_opts| try handleCpaAccountSync(allocator, codex_home, account_opts),
+        .reconcile => |auth_dir| try handleCpaReconcile(allocator, codex_home, auth_dir),
+    }
+}
+
+/// 将单个账号复制到或移出独立 CPA 认证目录，不修改官方 Codex 活动凭据。
+fn handleCpaAccountSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaAccountSyncOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     const idx = registry.findAccountIndexByAccountKey(&reg, opts.account_key) orelse return error.AccountNotFound;
@@ -139,6 +147,19 @@ fn handleCpaSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli
     try out.writeAll("{\"account_key\":");
     try writeJsonString(out, opts.account_key);
     try out.print(",\"enabled\":{}}}\n", .{opts.enabled});
+    try out.flush();
+}
+
+/// 依据注册表快照收敛 CPA 认证目录，并返回不含认证内容的计数摘要。
+fn handleCpaReconcile(allocator: std.mem.Allocator, codex_home: []const u8, auth_dir: []const u8) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    const summary = try registry.reconcileCpaAccounts(allocator, codex_home, &reg, auth_dir);
+
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.print("{{\"synced\":{d},\"removed\":{d}}}\n", .{ summary.synced, summary.removed });
     try out.flush();
 }
 

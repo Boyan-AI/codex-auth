@@ -53,6 +53,10 @@ The initial export includes only ChatGPT accounts whose `smart_pool_enabled` val
 true. Later include/exclude actions call `gui cpa-sync` to copy or remove exactly one
 deterministically named CPA file. CPA and the direct path refresh their own copies
 after that explicit synchronization; they never share a writable auth file.
+On desktop startup, `gui cpa-sync reconcile` rewrites every enabled ChatGPT member
+and removes any other JSON credential from the dedicated CPA authentication directory.
+Non-JSON runtime files are left untouched. API Key connections remain managed through
+CPA's authenticated management endpoint and never become files in this directory.
 The desktop app treats `token_invalidated` and `token_revoked` as terminal
 authentication failures. An affected account keeps its `smart_pool_enabled` user
 preference, but its CPA authentication copy is removed so round-robin routing cannot

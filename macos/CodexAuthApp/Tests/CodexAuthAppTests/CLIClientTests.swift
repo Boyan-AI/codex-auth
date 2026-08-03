@@ -162,6 +162,25 @@ final class CLIClientTests: XCTestCase {
         XCTAssertFalse(runner.calls[0].arguments.joined(separator: " ").contains("test-management-key"))
     }
 
+    /// 验证启动对账只传递 CPA 专用认证目录，不暴露管理密钥。
+    func testClientBuildsCPAReconcileCommand() async throws {
+        let runner = RecordingCommandRunner(output: "")
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner,
+            cpaConfigurationProvider: TestCPAConfigurationProvider()
+        )
+
+        try await client.reconcileCPAAccounts()
+
+        XCTAssertEqual(runner.calls, [
+            CommandCall(
+                executable: "/usr/local/bin/codex-auth",
+                arguments: ["gui", "cpa-sync", "reconcile", "/tmp/cpa-auth"]
+            ),
+        ])
+    }
+
     /// 验证客户端把安装配置交给事件轮询器，不直接读取管理队列。
     func testClientPollsCPAEventsWithInstalledConfiguration() async throws {
         let poller = RecordingCPAEventPoller(result: CPAEventBatch(eventCount: 2, quotaExceeded: true))

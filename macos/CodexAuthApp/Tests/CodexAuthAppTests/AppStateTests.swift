@@ -319,6 +319,21 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(client.refreshCallCount, 1)
         XCTAssertEqual(client.loadStateCallCount, 0)
+        XCTAssertEqual(client.cpaReconcileCallCount, 1)
+        XCTAssertEqual(client.startupOperationCalls, ["reconcile", "refresh"])
+    }
+
+    /// 验证启动 CPA 对账失败只显示可恢复错误，不丢弃已经加载的直连状态。
+    func testRefreshOnAppLaunchKeepsLoadedStateWhenCPAReconcileFails() async {
+        let expectedState = CodexAuthState.empty(codexHome: "/tmp/codex")
+        let client = StubCodexAuthClient(state: expectedState)
+        client.cpaReconcileError = CodexAuthCLIError.commandFailed("reconcile failed")
+        let appState = AppState(client: client)
+
+        await appState.refreshOnAppLaunch()
+
+        XCTAssertEqual(appState.state, expectedState)
+        XCTAssertEqual(appState.errorMessage, "CPA 账号池对账失败：命令执行失败：reconcile failed")
     }
 
     func testRefreshOnMenuOpenRunsUsageRefreshEveryTime() async {
@@ -590,6 +605,9 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var refreshCallCount = 0
     var tokenUsageCallModes: [TokenUsageScanMode] = []
     var cpaSyncCalls: [CPAAccountSyncCall] = []
+    var cpaReconcileCallCount = 0
+    var cpaReconcileError: Error?
+    var startupOperationCalls: [String] = []
     var cpaEventBatch: CPAEventBatch = .empty
     var shouldDelaySwitch = false
     private var switchContinuation: CheckedContinuation<Void, Never>?
@@ -613,6 +631,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
 
     func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
         refreshCallCount += 1
+        startupOperationCalls.append("refresh")
         return state
     }
 
@@ -669,6 +688,15 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     /// 记录 AppState 发出的 CPA 凭据同步请求。
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws {
         cpaSyncCalls.append(CPAAccountSyncCall(accountKey: accountKey, enabled: enabled))
+    }
+
+    /// 记录启动 CPA 全目录对账，并按需注入可恢复错误。
+    func reconcileCPAAccounts() async throws {
+        cpaReconcileCallCount += 1
+        startupOperationCalls.append("reconcile")
+        if let cpaReconcileError {
+            throw cpaReconcileError
+        }
     }
 
     /// 返回预置事件批次，验证轮询与刷新协调器的衔接。

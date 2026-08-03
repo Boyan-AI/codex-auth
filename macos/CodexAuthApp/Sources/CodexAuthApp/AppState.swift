@@ -66,12 +66,22 @@ final class AppState: ObservableObject {
         await load { try await client.loadState(apiMode: apiMode) }
     }
 
+    /// 首次启动先清除 CPA 孤儿凭据，再刷新并移除终止性认证失败账号；对账失败不阻断直连刷新。
     func refreshOnAppLaunch(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !didRefreshOnAppLaunch else {
             return
         }
         didRefreshOnAppLaunch = true
+        var reconcileError: Error?
+        do {
+            try await client.reconcileCPAAccounts()
+        } catch {
+            reconcileError = error
+        }
         await requestRefresh(.full, apiMode: apiMode)
+        if let reconcileError, errorMessage == nil {
+            errorMessage = "CPA 账号池对账失败：\(reconcileError.localizedDescription)"
+        }
     }
 
     /// 菜单每次打开都请求全量刷新；进行中的全量请求由协调器合并。

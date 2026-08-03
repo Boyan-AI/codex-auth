@@ -214,9 +214,36 @@ test "Scenario: Given gui cpa sync when parsing then account action and director
         .command => |cmd| switch (cmd) {
             .gui => |opts| switch (opts) {
                 .cpa_sync => |sync_opts| {
-                    try std.testing.expectEqualStrings("acct-key", sync_opts.account_key);
-                    try std.testing.expectEqualStrings("/tmp/cpa-auth", sync_opts.auth_dir);
-                    try std.testing.expect(!sync_opts.enabled);
+                    switch (sync_opts) {
+                        .account => |account_opts| {
+                            try std.testing.expectEqualStrings("acct-key", account_opts.account_key);
+                            try std.testing.expectEqualStrings("/tmp/cpa-auth", account_opts.auth_dir);
+                            try std.testing.expect(!account_opts.enabled);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+// 验证 CPA 全目录对账机器命令保留专用认证目录参数。
+test "Scenario: Given gui cpa reconcile when parsing then auth directory is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "gui", "cpa-sync", "reconcile", "/tmp/cpa-auth" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .cpa_sync => |sync_opts| switch (sync_opts) {
+                    .reconcile => |auth_dir| try std.testing.expectEqualStrings("/tmp/cpa-auth", auth_dir),
+                    else => return error.TestExpectedEqual,
                 },
                 else => return error.TestExpectedEqual,
             },
@@ -229,7 +256,9 @@ test "Scenario: Given gui cpa sync when parsing then account action and director
 test "Scenario: Given gui add-key when parsing then provider metadata is preserved without a secret argument" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{
-        "codex-auth", "gui", "add-key", "AI 系统", "relay", "https://api.example.com/v1",
+        "codex-auth", "gui",                        "add-key",
+        "AI 系统",
+        "relay",      "https://api.example.com/v1",
     };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);

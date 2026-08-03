@@ -96,10 +96,14 @@ pub const GuiSmartPoolOptions = struct {
     account_key: []u8,
     enabled: bool,
 };
-pub const GuiCpaSyncOptions = struct {
+pub const GuiCpaAccountSyncOptions = struct {
     account_key: []u8,
     auth_dir: []u8,
     enabled: bool,
+};
+pub const GuiCpaSyncOptions = union(enum) {
+    account: GuiCpaAccountSyncOptions,
+    reconcile: []u8,
 };
 pub const ApiKeyProvider = enum { openai, relay };
 pub const GuiAddApiKeyOptions = struct {

@@ -122,6 +122,7 @@ pub const defaultExportDirectory = export_mod.defaultExportDirectory;
 pub const exportAccounts = export_mod.exportAccounts;
 pub const exportSmartPoolAccounts = export_mod.exportSmartPoolAccounts;
 pub const syncCpaAccount = export_mod.syncCpaAccount;
+pub const reconcileCpaAccounts = export_mod.reconcileCpaAccounts;
 
 pub const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 pub const setActiveAccountKey = account_ops.setActiveAccountKey;
