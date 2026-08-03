@@ -15,6 +15,10 @@ macos/**/.swiftpm/
 # IDE/Editor
 .idea/
 
+# Local Codex and CodeGraph state
+.codex/
+.codegraph/
+
 # Local benchmarking workspace
 benchmark/*
 
