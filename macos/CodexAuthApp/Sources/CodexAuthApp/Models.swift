@@ -243,6 +243,20 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
         smartPoolEnabled ?? true
     }
 
+    /// 仅识别要求重新登录的终止性认证错误，避免临时网络或额度错误误暂停路由。
+    var hasTerminalAuthenticationFailure: Bool {
+        guard !isAPIKey else { return false }
+        let statusTokens = usage.sevenDay.status
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+        return statusTokens.contains("token_invalidated") || statusTokens.contains("token_revoked")
+    }
+
+    /// 合并用户智能池意愿与运行时认证状态，作为 CPA 凭据副本的实际启用条件。
+    var isEligibleForSmartRouting: Bool {
+        participatesInSmartPool && !hasTerminalAuthenticationFailure
+    }
+
     /// 仅把存在有效周额度的账号视为可选择状态，错误文本继续原样展示。
     var isAvailable: Bool {
         if isAPIKey { return true }

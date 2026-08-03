@@ -211,6 +211,46 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-1", enabled: false)])
     }
 
+    /// 验证首次发现终止性认证错误时删除 CPA 副本，重复刷新不会重复执行同步。
+    func testTerminalAuthenticationFailurePausesCPARoutingOnce() async {
+        let client = StubCodexAuthClient(state: makeUsageState(status: "401 token_invalidated"))
+        let appState = AppState(client: client)
+
+        await appState.refresh()
+        await appState.refresh()
+
+        XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-alert", enabled: false)])
+    }
+
+    /// 验证被认证错误自动暂停的账号在重新认证并刷新成功后恢复 CPA 副本。
+    func testRecoveredAuthenticationRestoresCPARouting() async {
+        let client = StubCodexAuthClient(state: makeUsageState(status: "401 token_revoked"))
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        client.state = makeUsageState(remainingPercent: 80, status: "ok")
+        await appState.refresh()
+
+        XCTAssertEqual(client.cpaSyncCalls, [
+            CPAAccountSyncCall(accountKey: "acct-alert", enabled: false),
+            CPAAccountSyncCall(accountKey: "acct-alert", enabled: true),
+        ])
+    }
+
+    /// 验证用户明确排除的账号即使状态恢复，也不会被自动重新加入 CPA。
+    func testExcludedAccountIsNotAutomaticallyRestoredToCPA() async {
+        let client = StubCodexAuthClient(
+            state: makeUsageState(status: "401 token_invalidated", smartPoolEnabled: false)
+        )
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        client.state = makeUsageState(remainingPercent: 80, status: "ok", smartPoolEnabled: false)
+        await appState.refresh()
+
+        XCTAssertTrue(client.cpaSyncCalls.isEmpty)
+    }
+
     func testOpenCodexSessionUsesDirectoryWithoutPersistentOpenedMessage() async {
         let client = StubCodexAuthClient(state: .empty(codexHome: "/tmp/codex"))
         let appState = AppState(client: client)
@@ -418,10 +458,12 @@ final class RecordingUsageAlertPresenter: UsageAlertPresenting {
 /// 创建仅包含 7 天窗口的测试状态，默认窗口状态为可用。
 private func makeUsageState(
     remainingPercent: Int? = nil,
-    sevenDay: UsageWindow? = nil
+    sevenDay: UsageWindow? = nil,
+    status: String = "ok",
+    smartPoolEnabled: Bool = true
 ) -> CodexAuthState {
     let resolvedSevenDay = sevenDay ?? UsageWindow(
-        status: "ok",
+        status: status,
         remainingPercent: remainingPercent,
         total: 100,
         used: remainingPercent.map { 100 - $0 },
@@ -435,7 +477,7 @@ private func makeUsageState(
         accountName: nil,
         plan: "pro",
         authMode: "chatgpt",
-        smartPoolEnabled: true,
+        smartPoolEnabled: smartPoolEnabled,
         isActive: true,
         usage: UsageInfo(fiveHour: nil, sevenDay: resolvedSevenDay),
         lastUsageAt: nil,

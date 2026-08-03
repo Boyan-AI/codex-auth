@@ -213,6 +213,23 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(window.menuBarPercentText, "--")
     }
 
+    /// 验证只有明确要求重新登录的认证状态会暂停 CPA 路由，普通故障继续保留成员资格。
+    func testSmartRoutingEligibilityRejectsTerminalAuthenticationFailuresOnly() {
+        let invalidated = makeAccount(accountKey: "invalidated", usageStatus: "401 token_invalidated")
+        let revoked = makeAccount(accountKey: "revoked", usageStatus: "401 token_revoked")
+        let networkError = makeAccount(accountKey: "network", usageStatus: "network_error")
+        let healthy = makeAccount(accountKey: "healthy", usageStatus: "ok", remainingPercent: 80)
+
+        XCTAssertTrue(invalidated.hasTerminalAuthenticationFailure)
+        XCTAssertFalse(invalidated.isEligibleForSmartRouting)
+        XCTAssertTrue(revoked.hasTerminalAuthenticationFailure)
+        XCTAssertFalse(revoked.isEligibleForSmartRouting)
+        XCTAssertFalse(networkError.hasTerminalAuthenticationFailure)
+        XCTAssertTrue(networkError.isEligibleForSmartRouting)
+        XCTAssertFalse(healthy.hasTerminalAuthenticationFailure)
+        XCTAssertTrue(healthy.isEligibleForSmartRouting)
+    }
+
     func testLowUsageThresholdIsBelowTwentyPercent() {
         let low = UsageWindow(status: "ok", remainingPercent: 19, total: 100, used: 81, resetAt: nil)
         let boundary = UsageWindow(status: "ok", remainingPercent: 20, total: 100, used: 80, resetAt: nil)
@@ -399,6 +416,19 @@ final class ModelsTests: XCTestCase {
 
     /// 构造指定周额度的排序测试账号。
     private func makeAccount(accountKey: String, remainingPercent: Int?) -> CodexAccount {
+        makeAccount(
+            accountKey: accountKey,
+            usageStatus: remainingPercent == nil ? "network_error" : "ok",
+            remainingPercent: remainingPercent
+        )
+    }
+
+    /// 构造指定周额度状态的测试账号，集中验证认证失败与普通不可用状态的差异。
+    private func makeAccount(
+        accountKey: String,
+        usageStatus: String,
+        remainingPercent: Int? = nil
+    ) -> CodexAccount {
         CodexAccount(
             accountKey: accountKey,
             displayName: accountKey,
@@ -412,7 +442,7 @@ final class ModelsTests: XCTestCase {
             usage: UsageInfo(
                 fiveHour: nil,
                 sevenDay: UsageWindow(
-                    status: remainingPercent == nil ? "network_error" : "ok",
+                    status: usageStatus,
                     remainingPercent: remainingPercent,
                     total: remainingPercent == nil ? nil : 100,
                     used: remainingPercent.map { 100 - $0 },

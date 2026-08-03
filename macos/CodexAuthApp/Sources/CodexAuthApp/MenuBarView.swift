@@ -73,6 +73,13 @@ struct MenuBarView: View {
             Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个连接可用")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if !pausedSmartAccounts.isEmpty {
+                Label("\(pausedSmartAccounts.count) 个账号登录失效，已暂停路由", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -199,7 +206,14 @@ struct MenuBarView: View {
     }
 
     private var availableSmartAccountCount: Int {
-        (appState.state?.accounts ?? []).filter { $0.participatesInSmartPool && $0.isAvailable }.count
+        (appState.state?.accounts ?? []).filter { $0.isEligibleForSmartRouting && $0.isAvailable }.count
+    }
+
+    /// 返回仍保留智能池意愿但因登录失效而被运行时暂停的账号。
+    private var pausedSmartAccounts: [CodexAccount] {
+        (appState.state?.accounts ?? []).filter {
+            $0.participatesInSmartPool && $0.hasTerminalAuthenticationFailure
+        }
     }
 
     /// 关闭菜单后选择目录，并把目录交给 CPA 智能启动流程。

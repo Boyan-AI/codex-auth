@@ -53,6 +53,12 @@ The initial export includes only ChatGPT accounts whose `smart_pool_enabled` val
 true. Later include/exclude actions call `gui cpa-sync` to copy or remove exactly one
 deterministically named CPA file. CPA and the direct path refresh their own copies
 after that explicit synchronization; they never share a writable auth file.
+The desktop app treats `token_invalidated` and `token_revoked` as terminal
+authentication failures. An affected account keeps its `smart_pool_enabled` user
+preference, but its CPA authentication copy is removed so round-robin routing cannot
+select it. A later successful authentication refresh restores that copy automatically.
+Temporary network failures, unknown usage state, and quota exhaustion do not change
+runtime routing eligibility.
 Every exported OAuth file includes CPA's required `type: codex` provider discriminator.
 The desktop health check accepts CPA as connected only when the authenticated
 `/v1/models` response contains at least one model; an HTTP 200 with an empty catalog is

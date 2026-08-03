@@ -225,6 +225,18 @@ private struct RoutingManagementView: View {
                 routingMetric(title: "可用账号", value: "\(availableAccounts.count) / \(poolAccounts.count)")
             }
 
+            if !pausedAccounts.isEmpty {
+                Label(
+                    "\(pausedAccounts.count) 个账号登录失效，已从 CPA 路由暂停；重新登录并刷新后会自动恢复。",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.callout)
+                .foregroundStyle(.orange)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            }
+
             List(poolAccounts) { account in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -232,6 +244,11 @@ private struct RoutingManagementView: View {
                         Text(account.secondaryLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if account.hasTerminalAuthenticationFailure {
+                            Text("登录失效，已暂停路由")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
                     }
                     Spacer()
                     Text(account.usage.sevenDay.displayText)
@@ -277,7 +294,12 @@ private struct RoutingManagementView: View {
     }
 
     private var availableAccounts: [CodexAccount] {
-        poolAccounts.filter(\.isAvailable)
+        poolAccounts.filter { $0.isEligibleForSmartRouting && $0.isAvailable }
+    }
+
+    /// 返回用户仍希望加入智能池、但已被终止性认证错误暂停的成员。
+    private var pausedAccounts: [CodexAccount] {
+        poolAccounts.filter(\.hasTerminalAuthenticationFailure)
     }
 }
 

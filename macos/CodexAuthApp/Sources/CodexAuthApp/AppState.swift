@@ -35,6 +35,7 @@ final class AppState: ObservableObject {
     private var pendingIncrementalTokenRefresh = false
     private var tokenUsageGeneration = 0
     private var loadSequence = 0
+    private var synchronizedCPAEligibility: [String: Bool] = [:]
 
     /// 注入状态客户端和低额度展示器，便于隔离系统通知并测试阈值行为。
     init(
@@ -169,7 +170,9 @@ final class AppState: ObservableObject {
             DeletedAccountStore.append(account)
             deletedAccounts = DeletedAccountStore.load()
             notice = "已删除账号。"
-            await synchronizeCPAAccount(accountKey: account.accountKey, enabled: false)
+            if await synchronizeCPAAccount(accountKey: account.accountKey, enabled: false) {
+                synchronizedCPAEligibility.removeValue(forKey: account.accountKey)
+            }
             return state
         }
     }
@@ -209,7 +212,9 @@ final class AppState: ObservableObject {
             notice = includeInSmartPool ? "已添加 API Key 并加入智能路由。" : "已添加 API Key。默认未加入智能路由。"
             if includeInSmartPool, let account = state.accounts.first(where: { $0.isAPIKey && $0.baseURL == baseURL }) {
                 state = try await client.setSmartPoolEnabled(accountKey: account.accountKey, enabled: true)
-                await synchronizeCPAAccount(accountKey: account.accountKey, enabled: true)
+                if await synchronizeCPAAccount(accountKey: account.accountKey, enabled: true) {
+                    synchronizedCPAEligibility[account.accountKey] = true
+                }
             }
             return state
         }
@@ -244,7 +249,12 @@ final class AppState: ObservableObject {
         await load {
             let state = try await client.setSmartPoolEnabled(accountKey: accountKey, enabled: enabled)
             notice = enabled ? "已加入智能路由。" : "已从智能路由排除。"
-            await synchronizeCPAAccount(accountKey: accountKey, enabled: enabled)
+            let routingEnabled = state.accounts
+                .first(where: { $0.accountKey == accountKey })?
+                .isEligibleForSmartRouting ?? false
+            if await synchronizeCPAAccount(accountKey: accountKey, enabled: routingEnabled) {
+                synchronizedCPAEligibility[accountKey] = routingEnabled
+            }
             return state
         }
     }
@@ -353,8 +363,7 @@ final class AppState: ObservableObject {
         do {
             let loadedState = try await client.refresh(apiMode: apiMode)
             if sequence == loadSequence {
-                state = loadedState
-                presentUsageAlerts(for: loadedState)
+                await acceptState(loadedState)
             }
         } catch {
             if sequence == loadSequence {
@@ -373,8 +382,7 @@ final class AppState: ObservableObject {
         do {
             let loadedState = try await client.refresh(apiMode: apiMode)
             if sequence == loadSequence {
-                state = loadedState
-                presentUsageAlerts(for: loadedState)
+                await acceptState(loadedState)
             }
         } catch {
             if sequence == loadSequence {
@@ -410,8 +418,7 @@ final class AppState: ObservableObject {
         do {
             let loadedState = try await operation()
             if sequence == loadSequence {
-                state = loadedState
-                presentUsageAlerts(for: loadedState)
+                await acceptState(loadedState)
             }
         } catch {
             if sequence == loadSequence {
@@ -427,12 +434,42 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 接受最新状态后协调终止性认证故障，确保 CPA 不再选择已失效的凭据副本。
+    private func acceptState(_ loadedState: CodexAuthState) async {
+        state = loadedState
+        presentUsageAlerts(for: loadedState)
+        await reconcileCPAEligibility(for: loadedState.accounts)
+    }
+
+    /// 失败同步保持未确认状态供下次刷新重试；健康成员只在此前被自动暂停时恢复。
+    private func reconcileCPAEligibility(for accounts: [CodexAccount]) async {
+        for account in accounts where account.participatesInSmartPool {
+            let desiredEligibility: Bool
+            if account.hasTerminalAuthenticationFailure {
+                desiredEligibility = false
+            } else if synchronizedCPAEligibility[account.accountKey] == false {
+                desiredEligibility = true
+            } else {
+                continue
+            }
+            guard synchronizedCPAEligibility[account.accountKey] != desiredEligibility else {
+                continue
+            }
+            if await synchronizeCPAAccount(accountKey: account.accountKey, enabled: desiredEligibility) {
+                synchronizedCPAEligibility[account.accountKey] = desiredEligibility
+            }
+        }
+    }
+
     /// CPA 同步失败不回滚已保存的成员状态，只展示可恢复的告警。
-    private func synchronizeCPAAccount(accountKey: String, enabled: Bool) async {
+    @discardableResult
+    private func synchronizeCPAAccount(accountKey: String, enabled: Bool) async -> Bool {
         do {
             try await client.syncCPAAccount(accountKey: accountKey, enabled: enabled)
+            return true
         } catch {
             errorMessage = "智能池设置已保存，但 CPA 凭据同步失败：\(error.localizedDescription)"
+            return false
         }
     }
 }
