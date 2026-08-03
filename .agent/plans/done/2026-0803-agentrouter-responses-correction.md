@@ -72,3 +72,9 @@ Execution Mode: solo
 - 直连账号与 Key 双向切换闭环通过。
 - CPA 账号→Key 的重新选择通过，但 Key 最终请求返回 401；CPA Key→账号闭环通过。该失败不应归因于账号选择器，需后续单独排查 CPA 对当前上游的请求兼容性。
 - CPA 临时状态已完整恢复；测试 Key 未留在 CPA 管理列表、Registry 或 CPA 认证目录中。
+
+## 后续复验修正（2026-08-03）
+- CPA 7.2.109 已确认正确选择 Key，保存值与测试 Key 完全一致，Authorization 与上游 URL 正确。
+- Codex 0.146.0 源码确认真实客户端发送 `Originator` 和完整 User-Agent；将 `Originator: codex_exec` 注入 CPA Key 条目后，CPA 日志确认上游已收到该头，但仍返回 HTTP 401。
+- 使用同一 Key 绕过 CPA 直连 AgentRouter 时，Python 客户端发送 CPA 完整转换体、最小 Responses 体以及完整 Codex User-Agent 均返回 HTTP 401；同一 Key 使用真实 Codex Rust 客户端直连仍为 HTTP 200。
+- 因此最终根因不是 CPA 账号→Key 选择失败、Key 截断、请求体附加字段或普通 HTTP 头缺失，而是 AgentRouter 对真实 Codex Rust 客户端与 Python/CPA 客户端存在实现级客户端识别差异。上游返回“无效令牌”具有误导性；CPA 当前无法仅靠配置兼容该 Key。
