@@ -68,11 +68,14 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("resume --last"))
     }
 
-    /// 验证账号和官方 Key 直连无需自定义 provider。
-    func testDirectLaunchCommandUsesDefaultProviderForOfficialConnection() {
+    /// 验证账号和官方 Key 直连显式选择内置 provider，不继承全局自定义 provider。
+    func testDirectLaunchCommandUsesOfficialProviderForOfficialConnection() {
         let account = CodexAccount.sample(accountKey: "account", alias: "账号", isActive: true)
 
-        XCTAssertEqual(CodexDirectLaunchCommand.build(account: account), "codex resume --last")
+        XCTAssertEqual(
+            CodexDirectLaunchCommand.build(account: account),
+            "codex -c 'model_provider=\"openai\"' resume --last"
+        )
     }
 
     /// 验证桌面 App 可从用户级安装文件读取客户端、管理端和认证目录配置。

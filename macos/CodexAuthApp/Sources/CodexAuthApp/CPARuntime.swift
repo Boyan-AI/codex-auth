@@ -350,14 +350,14 @@ enum CodexSmartLaunchCommand {
 
 /// 生成只对本次直连 Codex 进程生效的 provider 参数。
 enum CodexDirectLaunchCommand {
-    /// 官方账号和官方 Key 直接使用当前 auth.json；中转站使用自定义 provider 并复用当前 OpenAI 认证。
+    /// 为官方连接显式选择内置 OpenAI provider，避免继承用户全局中转站配置；中转站使用独立 provider。
     static func build(account: CodexAccount) -> String {
         guard account.isAPIKey,
               account.providerKind?.lowercased() == APIKeyProvider.relay.rawValue,
               let baseURL = account.baseURL,
               !baseURL.isEmpty
         else {
-            return "codex resume --last"
+            return officialProviderCommand()
         }
         let overrides = [
             #"model_provider="codex_auth_direct""#,
@@ -368,6 +368,12 @@ enum CodexDirectLaunchCommand {
         ]
         let arguments = overrides.flatMap { ["-c", shellQuote($0)] }
         return (["codex"] + arguments + ["resume", "--last"]).joined(separator: " ")
+    }
+
+    /// 只对本次 CLI 进程覆盖 provider，确保账号和官方 Key 不被全局自定义 provider 劫持。
+    private static func officialProviderCommand() -> String {
+        let argument = shellQuote(#"model_provider="openai""#)
+        return "codex -c \(argument) resume --last"
     }
 
     /// 使用 POSIX 单引号保护单次配置参数中的特殊字符。
