@@ -143,12 +143,13 @@ final class AppState: ObservableObject {
         guard !isAccountSwitchInProgress else {
             return
         }
+        let currentState = state
         isAccountSwitchInProgress = true
         defer { isAccountSwitchInProgress = false }
         await load {
-            let state = try await client.switchAccount(accountKey: accountKey)
+            let switchedState = try await client.switchAccount(accountKey: accountKey)
             notice = "已切换账号。新的 Codex CLI 会话将使用此账号。"
-            return state
+            return switchedState.preservingDisplayedTelemetry(from: currentState)
         }
     }
 

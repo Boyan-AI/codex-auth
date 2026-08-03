@@ -27,6 +27,54 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.notice, "已切换账号。新的 Codex CLI 会话将使用此账号。")
     }
 
+    /// 验证切换主号只更新活动状态，不用注册表旧缓存覆盖当前展示的额度与认证错误。
+    func testSwitchPreservesCurrentUsageSnapshot() async {
+        let currentState = CodexAuthState(
+            schemaVersion: 1,
+            codexHome: "/tmp/codex",
+            activeAccountKey: "acct-1",
+            generatedAt: Date(timeIntervalSince1970: 10),
+            refresh: RefreshInfo(attempted: true, status: "ok", message: nil),
+            warnings: [],
+            accounts: [
+                makeSwitchAccount(accountKey: "acct-1", isActive: true, remainingPercent: 100),
+                makeSwitchAccount(
+                    accountKey: "acct-2",
+                    isActive: false,
+                    remainingPercent: nil,
+                    status: "401 token_revoked"
+                ),
+                makeSwitchAccount(accountKey: "acct-removed", isActive: false, remainingPercent: 50),
+            ]
+        )
+        let staleSwitchState = CodexAuthState(
+            schemaVersion: 1,
+            codexHome: "/tmp/codex",
+            activeAccountKey: "acct-2",
+            generatedAt: Date(timeIntervalSince1970: 20),
+            refresh: RefreshInfo(attempted: false, status: "skipped", message: nil),
+            warnings: [],
+            accounts: [
+                makeSwitchAccount(accountKey: "acct-1", isActive: false, remainingPercent: 80),
+                makeSwitchAccount(accountKey: "acct-2", isActive: true, remainingPercent: 99),
+                makeSwitchAccount(accountKey: "acct-new", isActive: false, remainingPercent: 70),
+            ]
+        )
+        let client = StubCodexAuthClient(state: currentState)
+        client.switchState = staleSwitchState
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        await appState.switchAccount(accountKey: "acct-2")
+
+        XCTAssertEqual(appState.state?.activeAccountKey, "acct-2")
+        XCTAssertEqual(appState.state?.accounts[0].usage.sevenDay.remainingPercent, 100)
+        XCTAssertEqual(appState.state?.accounts[1].usage.sevenDay.status, "401 token_revoked")
+        XCTAssertNil(appState.state?.accounts[1].usage.sevenDay.remainingPercent)
+        XCTAssertEqual(appState.state?.accounts.map(\.accountKey), ["acct-1", "acct-2", "acct-new"])
+        XCTAssertEqual(appState.state?.accounts[2].usage.sevenDay.remainingPercent, 70)
+    }
+
     /// 验证账号切换期间只阻止重复切换，不复用后台全量刷新状态。
     func testAccountSwitchBusyStateCoalescesDuplicateRequests() async {
         let state = CodexAuthState.empty(codexHome: "/tmp/codex")
@@ -491,6 +539,38 @@ private func makeUsageState(
         refresh: RefreshInfo(attempted: true, status: "ok", message: nil),
         warnings: [],
         accounts: [account]
+    )
+}
+
+/// 创建账号切换测试使用的状态记录，可分别表达当前展示值和注册表旧缓存。
+private func makeSwitchAccount(
+    accountKey: String,
+    isActive: Bool,
+    remainingPercent: Int?,
+    status: String = "ok"
+) -> CodexAccount {
+    CodexAccount(
+        accountKey: accountKey,
+        displayName: accountKey,
+        alias: accountKey,
+        email: "\(accountKey)@example.com",
+        accountName: nil,
+        plan: "plus",
+        authMode: "chatgpt",
+        smartPoolEnabled: true,
+        isActive: isActive,
+        usage: UsageInfo(
+            fiveHour: nil,
+            sevenDay: UsageWindow(
+                status: status,
+                remainingPercent: remainingPercent,
+                total: remainingPercent == nil ? nil : 100,
+                used: remainingPercent.map { 100 - $0 },
+                resetAt: nil
+            )
+        ),
+        lastUsageAt: Date(timeIntervalSince1970: 5),
+        lastRefreshAt: Date(timeIntervalSince1970: 5)
     )
 }
 

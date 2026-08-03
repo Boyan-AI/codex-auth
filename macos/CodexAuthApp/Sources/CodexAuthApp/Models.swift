@@ -70,6 +70,34 @@ struct CodexAuthState: Decodable, Equatable {
         accounts.first { $0.accountKey == activeAccountKey || $0.isActive }
     }
 
+    /// 保留当前界面已经接受的账号遥测，同时采用切换结果中的账号结构与活动状态。
+    func preservingDisplayedTelemetry(from currentState: CodexAuthState?) -> CodexAuthState {
+        guard let currentState, currentState.codexHome == codexHome else {
+            return self
+        }
+        let mergedAccounts = accounts.map { account in
+            guard let currentAccount = currentState.accounts.first(where: { $0.accountKey == account.accountKey }) else {
+                return account
+            }
+            return account.preservingDisplayedTelemetry(from: currentAccount)
+        }
+        let activeResetCredits = mergedAccounts.first(where: {
+            $0.accountKey == activeAccountKey || $0.isActive
+        })?.resetCredits
+
+        return CodexAuthState(
+            schemaVersion: schemaVersion,
+            codexHome: codexHome,
+            activeAccountKey: activeAccountKey,
+            generatedAt: generatedAt,
+            refresh: currentState.refresh,
+            resetCredits: activeResetCredits ?? resetCredits,
+            warnings: warnings,
+            tokenUsage: currentState.tokenUsage,
+            accounts: mergedAccounts
+        )
+    }
+
     static func empty(codexHome: String) -> CodexAuthState {
         CodexAuthState(
             schemaVersion: 1,
@@ -287,6 +315,28 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             return maskedEmail
         }
         return "账号 \(accountKey.suffix(6))"
+    }
+
+    /// 使用当前展示中的额度、余额和刷新时间，避免纯本地切换回退到旧缓存。
+    func preservingDisplayedTelemetry(from currentAccount: CodexAccount) -> CodexAccount {
+        CodexAccount(
+            accountKey: accountKey,
+            displayName: displayName,
+            alias: alias,
+            email: email,
+            accountName: accountName,
+            plan: plan,
+            authMode: authMode,
+            resetCredits: currentAccount.resetCredits,
+            smartPoolEnabled: smartPoolEnabled,
+            providerKind: providerKind,
+            baseURL: baseURL,
+            balance: currentAccount.balance,
+            isActive: isActive,
+            usage: currentAccount.usage,
+            lastUsageAt: currentAccount.lastUsageAt,
+            lastRefreshAt: currentAccount.lastRefreshAt
+        )
     }
 
     private var maskedEmail: String? {
