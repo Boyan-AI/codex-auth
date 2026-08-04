@@ -551,7 +551,7 @@ test "registry load migrates schema four to five" {
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
 }
 
-test "registry schema five defaults missing smart pool field to enabled and rewrites it" {
+test "registry schema five defaults missing smart pool field to excluded and rewrites it" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -587,13 +587,13 @@ test "registry schema five defaults missing smart pool field to enabled and rewr
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(loaded.accounts.items[0].smart_pool_enabled);
+    try std.testing.expect(!loaded.accounts.items[0].smart_pool_enabled);
 
     var file = try tmp.dir.openFile("accounts/registry.json", .{});
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"smart_pool_enabled\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"smart_pool_enabled\": false") != null);
 }
 
 test "registry save and load preserves smart pool exclusion" {
@@ -2056,7 +2056,7 @@ test "export accounts writes cpa token files to default backup directory" {
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
 }
 
-test "smart pool export and single account sync preserve routing membership" {
+test "smart pool export remains explicit and single oauth sync never copies auth files" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -2076,6 +2076,7 @@ test "smart pool export and single account sync preserve routing membership" {
     var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
     defer import_report.deinit(gpa);
     const account_key = reg.accounts.items[0].account_key;
+    reg.accounts.items[0].smart_pool_enabled = true;
 
     const export_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "cpa-auth" });
     defer gpa.free(export_dir);
@@ -2099,14 +2100,14 @@ test "smart pool export and single account sync preserve routing membership" {
 
     reg.accounts.items[0].smart_pool_enabled = true;
     try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, true);
-    _ = try fs.cwd().statFile(exported_path);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
     reg.accounts.items[0].smart_pool_enabled = false;
     try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, false);
     try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
 }
 
-// 验证 CPA 专用认证目录严格收敛到智能池 ChatGPT 成员，同时保留非 JSON 文件。
-test "reconcile cpa auth directory removes orphan excluded and api key json files" {
+// 验证 CPA 对账只清理旧版复制文件，保留 CPA 自主 OAuth 文件和非 JSON 文件。
+test "reconcile cpa auth directory removes only legacy managed copies" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -2152,25 +2153,15 @@ test "reconcile cpa auth directory removes orphan excluded and api key json file
         defer gpa.free(stale_path);
         try tmp.dir.writeFile(.{ .sub_path = stale_path, .data = "stale" });
     }
-    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/orphan.json", .data = "orphan" });
+    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/codex-independent@example.com.json", .data = "independent" });
     try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/README.txt", .data = "keep" });
 
     const summary = try registry.reconcileCpaAccounts(gpa, codex_home, &reg, auth_dir);
 
-    try std.testing.expectEqual(@as(usize, 1), summary.synced);
-    try std.testing.expectEqual(@as(usize, 3), summary.removed);
-    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile("cpa-auth/orphan.json"));
+    try std.testing.expectEqual(@as(usize, 0), summary.synced);
+    try std.testing.expectEqual(@as(usize, 2), summary.removed);
+    try std.testing.expect(!reg.accounts.items[0].smart_pool_enabled);
+    try std.testing.expect(!reg.accounts.items[1].smart_pool_enabled);
+    _ = try tmp.dir.statFile("cpa-auth/codex-independent@example.com.json");
     _ = try tmp.dir.statFile("cpa-auth/README.txt");
-    const included_name = try registry.accountSnapshotFileName(gpa, reg.accounts.items[0].account_key);
-    defer gpa.free(included_name);
-    const included_cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{
-        included_name[0 .. included_name.len - ".auth.json".len],
-        ".json",
-    });
-    defer gpa.free(included_cpa_name);
-    const included_path = try fs.path.join(gpa, &[_][]const u8{ auth_dir, included_cpa_name });
-    defer gpa.free(included_path);
-    const included_data = try fixtures.readFileAlloc(gpa, included_path);
-    defer gpa.free(included_data);
-    try std.testing.expect(std.mem.indexOf(u8, included_data, "refresh-included@example.com") != null);
 }

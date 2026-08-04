@@ -181,6 +181,24 @@ final class CLIClientTests: XCTestCase {
         ])
     }
 
+    /// 验证 ChatGPT 智能池切换委托给 CPA 原生 OAuth 管理器，而不是 CLI 文件复制命令。
+    func testClientRoutesChatGPTAccountThroughCPAOAuthManager() async throws {
+        let runner = RecordingCommandRunner(output: "")
+        let oauthManager = RecordingCPAOAuthManager()
+        let client = CodexAuthCLIClient(
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex-auth"),
+            runner: runner,
+            cpaConfigurationProvider: TestCPAConfigurationProvider(),
+            cpaOAuthManager: oauthManager
+        )
+        let account = CodexAccount.sample(accountKey: "acct-1", alias: "账号", isActive: false)
+
+        try await client.setCPAAccountRouting(account: account, enabled: true)
+
+        XCTAssertTrue(runner.calls.isEmpty)
+        XCTAssertEqual(oauthManager.calls, [CPAOAuthRoutingCall(accountKey: "acct-1", enabled: true)])
+    }
+
     /// 验证客户端把安装配置交给事件轮询器，不直接读取管理队列。
     func testClientPollsCPAEventsWithInstalledConfiguration() async throws {
         let poller = RecordingCPAEventPoller(result: CPAEventBatch(eventCount: 2, quotaExceeded: true))
@@ -302,10 +320,15 @@ final class CLIClientTests: XCTestCase {
         XCTAssertTrue(runner.calls[0].arguments[1].contains("initial working directory:targetPath"))
         XCTAssertTrue(runner.calls[0].arguments[1].contains("model_provider"))
         XCTAssertTrue(runner.calls[0].arguments[1].contains("environment variables"))
+        XCTAssertTrue(runner.calls[0].arguments[1].contains("/usr/bin/printenv CODEX_AUTH_CPA_API_KEY"))
+        XCTAssertTrue(runner.calls[0].arguments[1].contains("/usr/bin/printenv NO_PROXY"))
+        XCTAssertTrue(runner.calls[0].arguments[1].contains("/usr/bin/printenv no_proxy"))
         XCTAssertTrue(runner.calls[0].arguments[1].contains("initial input:initialCommand"))
         XCTAssertTrue(runner.calls[0].arguments[1].contains("set targetPath to \"/Users/me/project\""))
         XCTAssertFalse(runner.calls[0].arguments[1].contains("test-cpa-key"))
-        XCTAssertEqual(runner.calls[0].environment, ["CODEX_AUTH_CPA_API_KEY": "test-cpa-key"])
+        XCTAssertEqual(runner.calls[0].environment?["CODEX_AUTH_CPA_API_KEY"], "test-cpa-key")
+        XCTAssertTrue(runner.calls[0].environment?["NO_PROXY"]?.contains("127.0.0.1") == true)
+        XCTAssertTrue(runner.calls[0].environment?["no_proxy"]?.contains("127.0.0.1") == true)
         XCTAssertEqual(healthChecker.validatedConfigurations.count, 1)
     }
 
@@ -377,7 +400,9 @@ final class CLIClientTests: XCTestCase {
         XCTAssertTrue(runner.calls[0].arguments[1].contains("/tmp/codex-auth-smart-launch.command"))
         XCTAssertFalse(runner.calls[0].arguments[1].contains("test-cpa-key"))
         XCTAssertTrue(scriptWriter.command?.contains("model_provider") == true)
-        XCTAssertEqual(scriptWriter.environment, ["CODEX_AUTH_CPA_API_KEY": "test-cpa-key"])
+        XCTAssertEqual(scriptWriter.environment?["CODEX_AUTH_CPA_API_KEY"], "test-cpa-key")
+        XCTAssertTrue(scriptWriter.environment?["NO_PROXY"]?.contains("127.0.0.1") == true)
+        XCTAssertTrue(scriptWriter.environment?["no_proxy"]?.contains("127.0.0.1") == true)
     }
 }
 
@@ -443,6 +468,22 @@ final class RecordingCPAEventPoller: CPAEventPolling {
     func poll(_ configuration: CPAConfiguration) async throws -> CPAEventBatch {
         configurations.append(configuration)
         return result
+    }
+}
+
+/// 表示测试 CPA OAuth 管理器收到的一次路由切换。
+struct CPAOAuthRoutingCall: Equatable {
+    let accountKey: String
+    let enabled: Bool
+}
+
+/// 记录 ChatGPT 路由切换，避免客户端测试访问真实 CPA 管理接口。
+final class RecordingCPAOAuthManager: CPAOAuthManaging {
+    private(set) var calls: [CPAOAuthRoutingCall] = []
+
+    /// 保存账号和目标状态，不执行浏览器授权。
+    func setRouting(for account: CodexAccount, enabled: Bool, configuration: CPAConfiguration) async throws {
+        calls.append(CPAOAuthRoutingCall(accountKey: account.accountKey, enabled: enabled))
     }
 }
 

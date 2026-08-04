@@ -37,7 +37,7 @@ final class CPARuntimeTests: XCTestCase {
         }
     }
 
-    /// 验证 provider 覆盖只作用于当前 CLI 命令，且命令文本不包含密钥。
+    /// 验证智能启动创建新会话，provider 覆盖只作用于当前命令且不包含密钥。
     func testSmartLaunchCommandUsesInvocationOnlyProviderOverrides() throws {
         let configuration = try CPAConfiguration(
             baseURLString: "http://localhost:8317/v1",
@@ -50,8 +50,20 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertTrue(command.contains(#"model_provider="codex_auth_cpa""#))
         XCTAssertTrue(command.contains(#"model_providers.codex_auth_cpa.base_url="http://localhost:8317/v1""#))
         XCTAssertTrue(command.contains(#"model_providers.codex_auth_cpa.env_key="CODEX_AUTH_CPA_API_KEY""#))
-        XCTAssertTrue(command.hasSuffix("resume --last"))
+        XCTAssertFalse(command.contains("resume --last"))
         XCTAssertFalse(command.contains("never-render-this-key"))
+    }
+
+    /// 验证智能启动保留用户代理绕过规则，并补齐本机 CPA 地址的大小写变量。
+    func testSmartLaunchEnvironmentMergesLocalProxyBypass() {
+        let environment = CodexSmartLaunchEnvironment.build(
+            apiKey: "client-key",
+            inherited: ["NO_PROXY": "example.test,LOCALHOST", "no_proxy": "10.0.0.0/8"]
+        )
+
+        XCTAssertEqual(environment[CPAConfiguration.apiKeyEnvironmentName], "client-key")
+        XCTAssertEqual(environment["NO_PROXY"], "example.test,LOCALHOST,127.0.0.1,::1")
+        XCTAssertEqual(environment["no_proxy"], "10.0.0.0/8,127.0.0.1,localhost,::1")
     }
 
     /// 验证中转站直连使用单次 provider 覆盖并复用当前 auth.json，不渲染密钥。
@@ -179,6 +191,119 @@ final class CPARuntimeTests: XCTestCase {
         try await checker.validate(configuration)
     }
 
+    /// 验证已有独立授权时只启用认证文件，不再发起浏览器 OAuth。
+    func testOAuthManagerReusesMatchingIndependentSession() async throws {
+        let configuration = try makeManagementConfiguration()
+        var paths: [String] = []
+        CPAStubURLProtocol.handler = { request in
+            paths.append(request.url?.path ?? "")
+            let data: Data
+            if request.httpMethod == "PATCH" {
+                data = Data(#"{"status":"ok"}"#.utf8)
+            } else {
+                data = Data(#"{"files":[{"name":"codex-me.json","type":"codex","email":"me@example.com","disabled":true,"unavailable":false,"status":"ready"}]}"#.utf8)
+            }
+            return (try self.okResponse(for: request), data)
+        }
+        let manager = URLSessionCPAOAuthManager(
+            session: makeCPAStubSession(),
+            openBrowser: { _ in XCTFail("不应打开浏览器"); return false },
+            pollDelayNanoseconds: 0,
+            maximumPollAttempts: 1
+        )
+
+        try await manager.setRouting(
+            for: .sample(accountKey: "acct", alias: "账号", isActive: true),
+            enabled: true,
+            configuration: configuration
+        )
+
+        XCTAssertEqual(paths, ["/v0/management/auth-files", "/v0/management/auth-files/status"])
+    }
+
+    /// 验证缺少独立会话时启动 CPA OAuth，轮询成功并核对账号后才启用。
+    func testOAuthManagerAuthorizesAndVerifiesSelectedAccount() async throws {
+        let configuration = try makeManagementConfiguration()
+        var authFileReads = 0
+        var openedURL: URL?
+        CPAStubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            let data: Data
+            switch path {
+            case "/v0/management/auth-files":
+                authFileReads += 1
+                data = authFileReads == 1
+                    ? Data(#"{"files":[]}"#.utf8)
+                    : Data(#"{"files":[{"name":"codex-me.json","type":"codex","email":"me@example.com","disabled":false,"unavailable":false,"status":"ready"}]}"#.utf8)
+            case "/v0/management/codex-auth-url":
+                data = Data(#"{"url":"https://auth.example.test/start","state":"state-1"}"#.utf8)
+            case "/v0/management/get-auth-status":
+                data = Data(#"{"status":"ok"}"#.utf8)
+            default:
+                data = Data(#"{"status":"ok"}"#.utf8)
+            }
+            return (try self.okResponse(for: request), data)
+        }
+        let manager = URLSessionCPAOAuthManager(
+            session: makeCPAStubSession(),
+            openBrowser: { openedURL = $0; return true },
+            pollDelayNanoseconds: 0,
+            maximumPollAttempts: 1
+        )
+
+        try await manager.setRouting(
+            for: .sample(accountKey: "acct", alias: "账号", isActive: true),
+            enabled: true,
+            configuration: configuration
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://auth.example.test/start")
+        XCTAssertEqual(authFileReads, 2)
+    }
+
+    /// 验证浏览器登录了其他账号时拒绝提交，并停用本次新增文件。
+    func testOAuthManagerRejectsMismatchedAccount() async throws {
+        let configuration = try makeManagementConfiguration()
+        var authFileReads = 0
+        CPAStubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            let data: Data
+            if path == "/v0/management/auth-files" {
+                authFileReads += 1
+                data = authFileReads == 1
+                    ? Data(#"{"files":[]}"#.utf8)
+                    : Data(#"{"files":[{"name":"codex-other.json","type":"codex","email":"other@example.com","disabled":false,"unavailable":false,"status":"ready"}]}"#.utf8)
+            } else if path == "/v0/management/codex-auth-url" {
+                data = Data(#"{"url":"https://auth.example.test/start","state":"state-2"}"#.utf8)
+            } else if path == "/v0/management/get-auth-status" {
+                data = Data(#"{"status":"ok"}"#.utf8)
+            } else {
+                data = Data(#"{"status":"ok"}"#.utf8)
+            }
+            return (try self.okResponse(for: request), data)
+        }
+        let manager = URLSessionCPAOAuthManager(
+            session: makeCPAStubSession(),
+            openBrowser: { _ in true },
+            pollDelayNanoseconds: 0,
+            maximumPollAttempts: 1
+        )
+
+        do {
+            try await manager.setRouting(
+                for: .sample(accountKey: "acct", alias: "账号", isActive: true),
+                enabled: true,
+                configuration: configuration
+            )
+            XCTFail("应拒绝账号不匹配")
+        } catch {
+            XCTAssertEqual(
+                error as? CPARuntimeError,
+                .oauthAccountMismatch(expected: "me@example.com", actual: "other@example.com")
+            )
+        }
+    }
+
     /// 验证事件队列只提取记录数量和会影响额度刷新决策的 429 状态。
     func testEventBatchDecodesQuotaExceededStatus() throws {
         let data = Data(#"[{"fail":null},{"fail":{"status_code":429}},{"fail":{"status_code":500}}]"#.utf8)
@@ -194,6 +319,28 @@ final class CPARuntimeTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CPAStubURLProtocol.self]
         return URLSession(configuration: configuration)
+    }
+
+    /// 创建带管理密钥的本机测试配置。
+    private func makeManagementConfiguration() throws -> CPAConfiguration {
+        try CPAConfiguration(
+            baseURLString: "http://127.0.0.1:8317/v1",
+            apiKey: "client-key",
+            managementKey: "management-key",
+            authDirectoryPath: "/tmp/cpa-auth"
+        )
+    }
+
+    /// 为测试请求创建统一成功响应。
+    private func okResponse(for request: URLRequest) throws -> HTTPURLResponse {
+        try XCTUnwrap(
+            HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )
+        )
     }
 }
 

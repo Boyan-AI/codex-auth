@@ -78,11 +78,11 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
     return rec;
 }
 
-/// 兼容 schema 2—4：字段缺失或类型异常时按默认加入智能池处理。
+/// 兼容旧 schema：字段缺失或类型异常时按安全默认值排除智能池。
 fn parseSmartPoolEnabled(value: ?std.json.Value) bool {
-    return switch (value orelse return true) {
+    return switch (value orelse return false) {
         .bool => |enabled| enabled,
-        else => true,
+        else => false,
     };
 }
 

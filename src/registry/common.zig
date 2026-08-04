@@ -111,8 +111,8 @@ pub const AccountRecord = struct {
     last_usage: ?RateLimitSnapshot,
     last_usage_at: ?i64,
     last_local_rollout: ?RolloutSignature,
-    /// 标记账号是否参与 CPA 智能路由池；旧记录缺失时默认加入。
-    smart_pool_enabled: bool = true,
+    /// 标记账号是否参与 CPA 智能路由池；新账号与旧版缺失字段均默认不加入。
+    smart_pool_enabled: bool = false,
     /// API Key 的非敏感 provider 元数据；密钥本身不进入 registry。
     provider_kind: ?ProviderKind = null,
     base_url: ?[]u8 = null,

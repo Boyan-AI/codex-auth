@@ -27,6 +27,7 @@ protocol CodexAuthClientProtocol {
     func clearAlias(accountKey: String) async throws -> CodexAuthState
     func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws
+    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws
     func reconcileCPAAccounts() async throws
     func login() async throws -> CodexAuthState
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState
@@ -55,6 +56,11 @@ extension CodexAuthClientProtocol {
 
     /// 兼容尚未实现 CPA 凭据同步的替代客户端。
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws {}
+
+    /// 兼容尚未实现 CPA 独立授权的替代客户端。
+    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws {
+        try await syncCPAAccount(accountKey: account.accountKey, enabled: enabled)
+    }
 
     /// 兼容尚未实现 CPA 全目录对账的替代客户端。
     func reconcileCPAAccounts() async throws {}
@@ -129,6 +135,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     let cpaConfigurationProvider: CPAConfigurationProviding
     let cpaHealthChecker: CPAHealthChecking
     let cpaEventPoller: CPAEventPolling
+    let cpaOAuthManager: CPAOAuthManaging
     let terminalLaunchScriptWriter: TerminalLaunchScriptWriting
     let quotaProxyURLProvider: () -> String?
 
@@ -140,6 +147,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         cpaConfigurationProvider: CPAConfigurationProviding = InstalledCPAConfigurationProvider(),
         cpaHealthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
         cpaEventPoller: CPAEventPolling = URLSessionCPAEventPoller(),
+        cpaOAuthManager: CPAOAuthManaging = URLSessionCPAOAuthManager(),
         terminalLaunchScriptWriter: TerminalLaunchScriptWriting = TemporaryTerminalLaunchScriptWriter(),
         quotaProxyURLProvider: @escaping () -> String? = {
             UserDefaults.standard.string(forKey: QuotaProxyConfiguration.userDefaultsKey)
@@ -151,6 +159,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         self.cpaConfigurationProvider = cpaConfigurationProvider
         self.cpaHealthChecker = cpaHealthChecker
         self.cpaEventPoller = cpaEventPoller
+        self.cpaOAuthManager = cpaOAuthManager
         self.terminalLaunchScriptWriter = terminalLaunchScriptWriter
         self.quotaProxyURLProvider = quotaProxyURLProvider
     }
@@ -223,6 +232,16 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         ], environment: environment.isEmpty ? nil : environment)
     }
 
+    /// API Key 沿用管理配置同步；ChatGPT 账号通过 CPA 原生 OAuth 独立授权。
+    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws {
+        if account.isAPIKey {
+            try await syncCPAAccount(accountKey: account.accountKey, enabled: enabled)
+            return
+        }
+        let configuration = try cpaConfigurationProvider.load()
+        try await cpaOAuthManager.setRouting(for: account, enabled: enabled, configuration: configuration)
+    }
+
     /// 将 CPA 专用认证目录收敛到当前注册表智能池，不传递管理密钥或认证内容。
     func reconcileCPAAccounts() async throws {
         let configuration: CPAConfiguration
@@ -283,13 +302,12 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         let configuration = try cpaConfigurationProvider.load()
         try await cpaHealthChecker.validate(configuration)
         let command = CodexSmartLaunchCommand.build(configuration: configuration)
-        let environment = [CPAConfiguration.apiKeyEnvironmentName: configuration.apiKey]
+        let environment = CodexSmartLaunchEnvironment.build(apiKey: configuration.apiKey)
 
         try await launchCodexSession(
             at: directoryPath,
             command: command,
-            environment: environment,
-            ghosttyEnvironmentVariable: CPAConfiguration.apiKeyEnvironmentName
+            environment: environment
         )
     }
 
@@ -298,17 +316,15 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         try await launchCodexSession(
             at: directoryPath,
             command: CodexDirectLaunchCommand.build(account: account),
-            environment: [:],
-            ghosttyEnvironmentVariable: nil
+            environment: [:]
         )
     }
 
-    /// 在 Ghostty 或 Terminal 中启动指定 Codex 命令，并按需注入单个受保护环境变量。
+    /// 在 Ghostty 或 Terminal 中启动指定 Codex 命令，并按名称转交当前会话的环境变量。
     private func launchCodexSession(
         at directoryPath: String,
         command: String,
-        environment: [String: String],
-        ghosttyEnvironmentVariable: String?
+        environment: [String: String]
     ) async throws {
 
         if !fileExists(Self.ghosttyAppURL) {
@@ -320,15 +336,16 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
             return
         }
 
-        let environmentSetup: String
-        let surfaceEnvironment: String
-        if let ghosttyEnvironmentVariable {
-            environmentSetup = "set launchValue to do shell script \"/usr/bin/printenv \(ghosttyEnvironmentVariable)\""
-            surfaceEnvironment = ", environment variables:{\"\(ghosttyEnvironmentVariable)=\" & launchValue}"
-        } else {
-            environmentSetup = ""
-            surfaceEnvironment = ""
-        }
+        let environmentNames = environment.keys.sorted()
+        let environmentSetup = environmentNames.enumerated().map { index, name in
+            "set launchValue\(index) to do shell script \"/usr/bin/printenv \(name)\""
+        }.joined(separator: "\n")
+        let surfaceValues = environmentNames.enumerated().map { index, name in
+            "\"\(name)=\" & launchValue\(index)"
+        }.joined(separator: ", ")
+        let surfaceEnvironment = surfaceValues.isEmpty
+            ? ""
+            : ", environment variables:{\(surfaceValues)}"
         let script = """
         set targetPath to \(appleScriptStringLiteral(directoryPath))
         set initialCommand to \(appleScriptStringLiteral(command)) & linefeed

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// 表示菜单和管理窗口使用的 CPA 连接状态。
@@ -31,6 +32,9 @@ enum CPARuntimeError: LocalizedError, Equatable {
     case missingAuthDirectory
     case invalidBaseURL(String)
     case nonLocalBaseURL(String)
+    case missingAccountIdentity
+    case oauthAccountMismatch(expected: String, actual: String)
+    case oauthTimedOut
     case unavailable(String)
 
     var errorDescription: String? {
@@ -49,10 +53,198 @@ enum CPARuntimeError: LocalizedError, Equatable {
             return "CPA 地址无效：\(value)"
         case .nonLocalBaseURL(let value):
             return "CPA 必须使用本机地址：\(value)"
+        case .missingAccountIdentity:
+            return "当前账号缺少可用于核对 CPA 登录的邮箱。"
+        case .oauthAccountMismatch(let expected, let actual):
+            return "CPA 登录账号不匹配：需要 \(expected)，实际为 \(actual)。"
+        case .oauthTimedOut:
+            return "CPA 登录等待超时，请重新开启智能路由。"
         case .unavailable(let reason):
             return "CPA 当前不可用：\(reason)"
         }
     }
+}
+
+/// 抽象 CPA OAuth 与认证文件状态管理，确保直连认证和智能路由认证互不复制。
+protocol CPAOAuthManaging {
+    func setRouting(for account: CodexAccount, enabled: Bool, configuration: CPAConfiguration) async throws
+}
+
+/// 通过 CPA 官方管理接口完成浏览器 OAuth、账号身份核对和启停控制。
+struct URLSessionCPAOAuthManager: CPAOAuthManaging {
+    let session: URLSession
+    let openBrowser: (URL) -> Bool
+    let pollDelayNanoseconds: UInt64
+    let maximumPollAttempts: Int
+
+    /// 注入浏览器和轮询参数，使单元测试不打开真实浏览器或等待真实时间。
+    init(
+        session: URLSession = .shared,
+        openBrowser: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        pollDelayNanoseconds: UInt64 = 1_000_000_000,
+        maximumPollAttempts: Int = 120
+    ) {
+        self.session = session
+        self.openBrowser = openBrowser
+        self.pollDelayNanoseconds = pollDelayNanoseconds
+        self.maximumPollAttempts = maximumPollAttempts
+    }
+
+    /// 已有独立会话时只切换禁用状态；缺失或失效时才发起新的 CPA OAuth。
+    func setRouting(for account: CodexAccount, enabled: Bool, configuration: CPAConfiguration) async throws {
+        guard let expectedEmail = account.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !expectedEmail.isEmpty
+        else {
+            throw CPARuntimeError.missingAccountIdentity
+        }
+        let existingFiles = try await listAuthFiles(configuration)
+        if let existing = existingFiles.first(where: { $0.matches(email: expectedEmail) }),
+           !enabled || existing.isReusable
+        {
+            try await setDisabled(!enabled, name: existing.name, configuration: configuration)
+            return
+        }
+        guard enabled else { return }
+
+        let previousNames = Set(existingFiles.map(\.name))
+        let start = try await startOAuth(configuration)
+        guard openBrowser(start.url) else {
+            throw CPARuntimeError.unavailable("无法打开浏览器")
+        }
+        try await waitForOAuth(state: start.state, configuration: configuration)
+        let refreshedFiles = try await listAuthFiles(configuration)
+        guard let matched = refreshedFiles.first(where: { $0.matches(email: expectedEmail) }) else {
+            let newlyAdded = refreshedFiles.filter {
+                !previousNames.contains($0.name) && ($0.type ?? "").lowercased() == "codex"
+            }
+            for file in newlyAdded {
+                try? await setDisabled(true, name: file.name, configuration: configuration)
+            }
+            let actual = newlyAdded.compactMap(\.email).first ?? "未知账号"
+            throw CPARuntimeError.oauthAccountMismatch(expected: expectedEmail, actual: actual)
+        }
+        try await setDisabled(false, name: matched.name, configuration: configuration)
+    }
+
+    /// 列出 CPA 认证文件的非敏感元数据，用邮箱匹配独立 OAuth 会话。
+    private func listAuthFiles(_ configuration: CPAConfiguration) async throws -> [CPAAuthFile] {
+        let data = try await request(path: "auth-files", configuration: configuration)
+        return try JSONDecoder().decode(CPAAuthFilesResponse.self, from: data).files
+    }
+
+    /// 请求 CPA 生成 Codex OAuth 地址和一次性状态标识。
+    private func startOAuth(_ configuration: CPAConfiguration) async throws -> CPAOAuthStart {
+        let data = try await request(
+            path: "codex-auth-url",
+            queryItems: [URLQueryItem(name: "is_webui", value: "true")],
+            configuration: configuration
+        )
+        return try JSONDecoder().decode(CPAOAuthStart.self, from: data)
+    }
+
+    /// 轮询 CPA 授权结果，错误和超时都不会提交智能池成员状态。
+    private func waitForOAuth(state: String, configuration: CPAConfiguration) async throws {
+        for _ in 0..<maximumPollAttempts {
+            let data = try await request(
+                path: "get-auth-status",
+                queryItems: [URLQueryItem(name: "state", value: state)],
+                configuration: configuration
+            )
+            let status = try JSONDecoder().decode(CPAOAuthStatus.self, from: data)
+            switch status.status {
+            case "ok": return
+            case "error": throw CPARuntimeError.unavailable(status.error ?? "OAuth failed")
+            default:
+                if pollDelayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: pollDelayNanoseconds)
+                }
+            }
+        }
+        throw CPARuntimeError.oauthTimedOut
+    }
+
+    /// 使用 CPA 状态接口禁用或启用指定认证文件，关闭路由时保留授权。
+    private func setDisabled(_ disabled: Bool, name: String, configuration: CPAConfiguration) async throws {
+        let body = try JSONEncoder().encode(CPAAuthFileStatusRequest(name: name, disabled: disabled))
+        _ = try await request(path: "auth-files/status", method: "PATCH", body: body, configuration: configuration)
+    }
+
+    /// 统一构造带管理密钥的本机请求，并将非成功响应转换为可展示错误。
+    private func request(
+        path: String,
+        method: String = "GET",
+        queryItems: [URLQueryItem] = [],
+        body: Data? = nil,
+        configuration: CPAConfiguration
+    ) async throws -> Data {
+        guard let managementKey = configuration.managementKey else {
+            throw CPARuntimeError.missingManagementKey
+        }
+        var components = URLComponents(
+            url: configuration.managementBaseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let url = components?.url else {
+            throw CPARuntimeError.invalidBaseURL(configuration.baseURL.absoluteString)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.timeoutInterval = 5
+        request.setValue("Bearer \(managementKey)", forHTTPHeaderField: "Authorization")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw CPARuntimeError.unavailable("management HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+        }
+        return data
+    }
+}
+
+/// 对应 CPA OAuth 启动响应中的浏览器地址和状态标识。
+private struct CPAOAuthStart: Decodable {
+    let url: URL
+    let state: String
+}
+
+/// 对应 CPA OAuth 状态轮询的最小响应。
+private struct CPAOAuthStatus: Decodable {
+    let status: String
+    let error: String?
+}
+
+/// 对应 CPA 认证文件列表的非敏感字段。
+private struct CPAAuthFilesResponse: Decodable {
+    let files: [CPAAuthFile]
+}
+
+/// 用于按账号身份和健康状态选择 CPA OAuth 文件。
+private struct CPAAuthFile: Decodable {
+    let name: String
+    let type: String?
+    let email: String?
+    let disabled: Bool?
+    let unavailable: Bool?
+    let status: String?
+
+    /// 邮箱比较忽略大小写，但不接受掩码或模糊匹配。
+    func matches(email expected: String) -> Bool {
+        email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expected
+    }
+
+    /// 只有 CPA 未报告不可用或终止性状态时才复用现有授权。
+    var isReusable: Bool {
+        guard unavailable != true else { return false }
+        let value = status?.lowercased() ?? ""
+        return !["invalid", "revoked", "error", "failed"].contains { value.contains($0) }
+    }
+}
+
+/// CPA 认证文件启停请求不包含任何 Token 内容。
+private struct CPAAuthFileStatusRequest: Encodable {
+    let name: String
+    let disabled: Bool
 }
 
 /// 保存单次智能启动所需的本机 CPA 连接参数。
@@ -327,9 +519,36 @@ private struct CPAUsageQueueRecord: Decodable {
     }
 }
 
+/// 生成智能启动子进程使用的密钥和本机代理绕过环境。
+enum CodexSmartLaunchEnvironment {
+    private static let localHosts = ["127.0.0.1", "localhost", "::1"]
+
+    /// 保留已有绕过规则，并确保大小写变量都覆盖 CPA 的本机地址。
+    static func build(apiKey: String, inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = [CPAConfiguration.apiKeyEnvironmentName: apiKey]
+        for name in ["NO_PROXY", "no_proxy"] {
+            environment[name] = mergedProxyBypass(inherited[name])
+        }
+        return environment
+    }
+
+    /// 合并逗号分隔的代理绕过项，忽略空值和大小写重复项。
+    private static func mergedProxyBypass(_ existing: String?) -> String {
+        var entries = (existing ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var normalized = Set(entries.map { $0.lowercased() })
+        for host in localHosts where normalized.insert(host.lowercased()).inserted {
+            entries.append(host)
+        }
+        return entries.joined(separator: ",")
+    }
+}
+
 /// 生成只对当前 Codex CLI 进程生效的 CPA provider 参数。
 enum CodexSmartLaunchCommand {
-    /// 构造恢复最近会话的完整 shell 命令，客户端密钥只通过环境变量传递。
+    /// 构造新建智能会话的完整 shell 命令，客户端密钥只通过环境变量传递。
     static func build(configuration: CPAConfiguration) -> String {
         let overrides = [
             #"model_provider="codex_auth_cpa""#,
@@ -339,7 +558,7 @@ enum CodexSmartLaunchCommand {
             #"model_providers.codex_auth_cpa.wire_api="responses""#,
         ]
         let arguments = overrides.flatMap { ["-c", shellQuote($0)] }
-        return (["codex"] + arguments + ["resume", "--last"]).joined(separator: " ")
+        return (["codex"] + arguments).joined(separator: " ")
     }
 
     /// 使用 POSIX 单引号保护单次配置参数中的空格和特殊字符。

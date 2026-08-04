@@ -155,6 +155,7 @@ fn handleCpaReconcile(allocator: std.mem.Allocator, codex_home: []const u8, auth
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     const summary = try registry.reconcileCpaAccounts(allocator, codex_home, &reg, auth_dir);
+    try registry.saveRegistry(allocator, codex_home, &reg);
 
     var stdout: io_util.Stdout = undefined;
     stdout.init();

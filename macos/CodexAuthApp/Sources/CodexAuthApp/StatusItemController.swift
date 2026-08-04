@@ -42,7 +42,13 @@ struct StatusItemPresentation: Equatable {
     var minimumStatusItemLength: CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
         let textWidth = (statusBarButtonText as NSString).size(withAttributes: [.font: font]).width
-        return ceil(textWidth + 16)
+        let maximumPercentWidth = ("100%" as NSString).size(withAttributes: [.font: font]).width
+        return ceil(max(textWidth, maximumPercentWidth) + Self.capsuleHorizontalPadding + Self.statusItemOuterPadding)
+    }
+
+    /// 将额度胶囊稳定居中在状态项按钮内，使弹窗箭头始终指向可见内容中心。
+    func horizontalOrigin(containerWidth: CGFloat, contentWidth: CGFloat) -> CGFloat {
+        max(0, floor((containerWidth - contentWidth) / 2))
     }
 
     /// 按实际片段数量计算从上到下的绘制原点，使单行和双行内容都整体垂直居中。
@@ -244,7 +250,6 @@ private final class QuotaStatusItemView: NSView {
     /// 绘制额度片段，并根据当前片段数量保持整体垂直居中。
     private func drawQuotaLines() {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
-        let x = StatusItemPresentation.statusItemOuterPadding / 2
         let lineSpacing: CGFloat = 10
         let textHeight = ceil(font.ascender - font.descender + font.leading)
         let capsuleVerticalPadding: CGFloat = presentation.segments.count == 1 ? 6 : 2
@@ -265,9 +270,11 @@ private final class QuotaStatusItemView: NSView {
                 .font: font,
                 .foregroundColor: NSColor.white,
             ]
-            (parts.prefix as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: prefixAttributes)
             let prefixWidth = (parts.prefix as NSString).size(withAttributes: prefixAttributes).width
             let percentSize = (parts.percent as NSString).size(withAttributes: percentAttributes)
+            let contentWidth = prefixWidth + ceil(percentSize.width) + StatusItemPresentation.capsuleHorizontalPadding
+            let x = presentation.horizontalOrigin(containerWidth: bounds.width, contentWidth: contentWidth)
+            (parts.prefix as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: prefixAttributes)
             let capsuleRect = NSRect(
                 x: x + prefixWidth,
                 y: y - capsuleVerticalPadding / 2,

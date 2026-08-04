@@ -108,7 +108,7 @@ fn exportAccountsFiltered(
     };
 }
 
-/// 同步单个账号的 CPA 凭据副本；排除操作只删除该账号确定性文件名。
+/// 校验单个 OAuth 智能池成员，但不复制或删除由 CPA 独立管理的旋转凭据。
 pub fn syncCpaAccount(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -117,34 +117,21 @@ pub fn syncCpaAccount(
     auth_dir: []const u8,
     enabled: bool,
 ) !void {
-    try ensurePrivateDir(auth_dir);
-    const base_name = try accountSnapshotFileName(allocator, account_key);
-    defer allocator.free(base_name);
-    const dest_name = try cpaExportFileName(allocator, base_name);
-    defer allocator.free(dest_name);
-    const dest = try std.fs.path.join(allocator, &[_][]const u8{ auth_dir, dest_name });
-    defer allocator.free(dest);
-
-    if (!enabled) {
-        try removeCpaFile(dest);
-        return;
-    }
-
     const rec = for (reg.accounts.items) |candidate| {
         if (std.mem.eql(u8, candidate.account_key, account_key)) break candidate;
     } else return error.AccountNotFound;
-    if (!rec.smart_pool_enabled) return error.AccountExcludedFromSmartPool;
     if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return error.UnsupportedCpaAuthMode;
-    const src = try accountAuthPath(allocator, codex_home, account_key);
-    defer allocator.free(src);
-    try exportCpaFile(allocator, src, dest);
+    if (enabled and !rec.smart_pool_enabled) return error.AccountExcludedFromSmartPool;
+    _ = allocator;
+    _ = codex_home;
+    _ = auth_dir;
 }
 
-/// 将 App 专用 CPA 认证目录收敛到注册表中启用的 ChatGPT 智能池成员。
+/// 清理旧版由 App 复制的确定性文件；CPA 自主 OAuth 文件保持原样。
 pub fn reconcileCpaAccounts(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
-    reg: *const Registry,
+    reg: *Registry,
     auth_dir: []const u8,
 ) !CpaReconcileSummary {
     try ensurePrivateDir(auth_dir);
@@ -157,39 +144,32 @@ pub fn reconcileCpaAccounts(
         while (try iterator.next(app_runtime.io())) |entry| {
             if (entry.kind != .file and entry.kind != .sym_link) continue;
             if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
-            if (try isExpectedCpaFileName(allocator, reg, entry.name)) continue;
+            const account_index = try legacyManagedCpaAccountIndex(allocator, reg, entry.name) orelse continue;
             try dir.deleteFile(app_runtime.io(), entry.name);
+            reg.accounts.items[account_index].smart_pool_enabled = false;
             removed += 1;
         }
     }
 
-    var synced: usize = 0;
-    for (reg.accounts.items) |record| {
-        if (!record.smart_pool_enabled) continue;
-        if (record.auth_mode != null and record.auth_mode.? == .apikey) continue;
-        try syncCpaAccount(allocator, codex_home, reg, record.account_key, auth_dir, true);
-        synced += 1;
-    }
-
-    return .{ .synced = synced, .removed = removed };
+    _ = codex_home;
+    return .{ .synced = 0, .removed = removed };
 }
 
-/// 判断文件名是否属于启用的 ChatGPT 智能池账号；API Key 不使用认证目录。
-fn isExpectedCpaFileName(
+/// 识别旧版按账号 Key 生成的 CPA 副本，避免误删 CPA OAuth 自己创建的文件。
+fn legacyManagedCpaAccountIndex(
     allocator: std.mem.Allocator,
     reg: *const Registry,
     file_name: []const u8,
-) !bool {
-    for (reg.accounts.items) |record| {
-        if (!record.smart_pool_enabled) continue;
+) !?usize {
+    for (reg.accounts.items, 0..) |record, index| {
         if (record.auth_mode != null and record.auth_mode.? == .apikey) continue;
         const base_name = try accountSnapshotFileName(allocator, record.account_key);
         defer allocator.free(base_name);
         const expected_name = try cpaExportFileName(allocator, base_name);
         defer allocator.free(expected_name);
-        if (std.mem.eql(u8, expected_name, file_name)) return true;
+        if (std.mem.eql(u8, expected_name, file_name)) return index;
     }
-    return false;
+    return null;
 }
 
 /// 全量智能池导出时移除已知且明确排除的旧副本，未知文件保持不变。

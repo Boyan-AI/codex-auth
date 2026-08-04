@@ -5,6 +5,8 @@ This document defines the product boundary between the official Codex CLI, Codex
 ## Product Boundary
 
 - The official Codex CLI remains the terminal client. Codex Auth launches it and supplies a custom provider only for that process.
+- Smart launch creates a new Codex session so an older project session cannot retain pre-authorization context. Direct launch keeps its existing resume behavior.
+- Smart launch explicitly bypasses HTTP proxies for localhost in its child process so the CPA base URL cannot be intercepted by a system proxy.
 - Account-pool selection, health state, and failover are Codex Auth + CPA features. They are not described as native Codex account selection.
 - Existing account switching remains available for direct sessions and affects only newly started direct Codex CLI sessions.
 - Smart launch never falls back to direct mode silently. A missing or unhealthy CPA runtime produces an actionable error.
@@ -24,7 +26,7 @@ Linking the same logical account across both paths uses stable account identity 
 
 Each account stores the Boolean field `smart_pool_enabled`.
 
-- Existing schema 2–4 accounts default to `true` during migration.
+- Existing records without the field and newly added accounts default to `false`.
 - Users may explicitly exclude an account without deleting it or changing direct-session behavior.
 - The field is routing metadata only. It does not imply that a CPA account session has already been connected or is healthy.
 - Authentication snapshots and filename conventions are unchanged.
@@ -38,7 +40,7 @@ LaunchAgent.
 - Runtime root: `~/Library/Application Support/Codex Auth/CPA`
 - CPA configuration: `config.yaml`, mode `0600`
 - App client configuration: `client.json`, mode `0600`
-- CPA authentication copies: `auth/`, separate from `~/.codex`
+- CPA OAuth sessions: `auth/`, separate from `~/.codex`
 - Service: `~/Library/LaunchAgents/com.boyan.codex-auth-cpa.plist`
 
 The runtime:
@@ -49,21 +51,20 @@ The runtime:
 - Enable usage statistics only when incremental event consumption is configured.
 - Prefer round-robin routing with session affinity and fail over only when the bound account becomes unavailable.
 
-The initial export includes only ChatGPT accounts whose `smart_pool_enabled` value is
-true. Later include/exclude actions call `gui cpa-sync` to copy or remove exactly one
-deterministically named CPA file. CPA and the direct path refresh their own copies
-after that explicit synchronization; they never share a writable auth file.
-On desktop startup, `gui cpa-sync reconcile` rewrites every enabled ChatGPT member
-and removes any other JSON credential from the dedicated CPA authentication directory.
-Non-JSON runtime files are left untouched. API Key connections remain managed through
-CPA's authenticated management endpoint and never become files in this directory.
-The desktop app treats `token_invalidated` and `token_revoked` as terminal
-authentication failures. An affected account keeps its `smart_pool_enabled` user
-preference, but its CPA authentication copy is removed so round-robin routing cannot
-select it. A later successful authentication refresh restores that copy automatically.
-Temporary network failures, unknown usage state, and quota exhaustion do not change
-runtime routing eligibility.
-Every exported OAuth file includes CPA's required `type: codex` provider discriminator.
+Enabling smart routing for a ChatGPT account first looks for a reusable CPA OAuth
+session with the exact same email. If none exists, the app starts CPA's native Codex
+OAuth flow, opens the browser, polls the management status endpoint, and verifies the
+resulting auth-file identity. Only a successful identity match commits
+`smart_pool_enabled=true`. A mismatch is disabled and reported to the user.
+
+Disabling smart routing marks the matching CPA auth file disabled through the
+management API but retains the independent grant, so re-enabling normally needs no
+browser login. Direct `auth.json` switching, refresh failures, and re-login never copy,
+overwrite, disable, or restore CPA OAuth files. Startup reconciliation only removes
+legacy deterministic files created by older Codex Auth versions and resets those
+accounts to excluded so the next enable action starts independent authorization.
+CPA-created OAuth files and non-JSON runtime files are preserved. API Key connections remain managed
+through CPA's authenticated management endpoint.
 The desktop health check accepts CPA as connected only when the authenticated
 `/v1/models` response contains at least one model; an HTTP 200 with an empty catalog is
 treated as unavailable instead of allowing a terminal session that cannot be routed.

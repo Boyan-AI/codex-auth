@@ -2,11 +2,12 @@ import SwiftUI
 
 /// 提供固定状态筛选，不引入用户自定义分组。
 private enum AccountStatusFilter: String, CaseIterable, Identifiable {
-    case all = "全部"
+    case all = "现有"
     case available = "可用"
     case cooling = "冷却"
     case error = "异常"
     case excluded = "已排除"
+    case deleted = "已删除"
 
     var id: String { rawValue }
 }
@@ -39,8 +40,18 @@ struct ManageAccountsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(filteredAccounts, selection: $selectedAccountID) { account in
-                accountListRow(account)
+            List(selection: $selectedAccountID) {
+                if selectedFilter == .deleted {
+                    ForEach(filteredDeletedAccounts) { record in
+                        deletedConnectionListRow(record)
+                            .tag(record.id)
+                    }
+                } else {
+                    ForEach(filteredAccounts) { account in
+                        accountListRow(account)
+                            .tag(account.id)
+                    }
+                }
             }
             .scrollIndicators(.hidden)
             .frame(width: 200)
@@ -48,7 +59,11 @@ struct ManageAccountsView: View {
             Divider()
 
             Group {
-                if let account = selectedAccount ?? filteredAccounts.first {
+                if selectedFilter == .deleted, let record = selectedDeletedConnection ?? filteredDeletedAccounts.first {
+                    DeletedConnectionDetailView(record: record)
+                } else if selectedFilter == .deleted {
+                    deletedEmptyState
+                } else if let account = selectedAccount ?? filteredAccounts.first {
                     AccountDetailView(
                         account: account,
                         onRelogin: { reloginAccount = account },
@@ -86,6 +101,7 @@ struct ManageAccountsView: View {
 
     /// 先按搜索词和固定状态筛选，再应用账号列表的统一排序规则。
     private var filteredAccounts: [CodexAccount] {
+        guard selectedFilter != .deleted else { return [] }
         let accounts = appState.state?.accounts ?? []
         let filtered = accounts.filter { account in
             let matchesSearch = searchText.isEmpty ||
@@ -95,6 +111,20 @@ struct ManageAccountsView: View {
             return matchesSearch && matchesType(account) && matchesFilter(account)
         }
         return AccountOrdering.sorted(filtered, by: selectedSortOrder)
+    }
+
+    /// 在已删除筛选中按名称、脱敏详情和连接类型匹配历史记录。
+    private var filteredDeletedAccounts: [DeletedAccountRecord] {
+        guard selectedFilter == .deleted else { return [] }
+        return appState.deletedAccounts.filter { record in
+            searchText.isEmpty || [
+                record.label,
+                record.detail,
+                record.resolvedConnectionType == .apiKey ? "API Key" : "ChatGPT 账号",
+            ]
+            .joined(separator: " ")
+            .localizedCaseInsensitiveContains(searchText)
+        }
     }
 
     /// 按统一连接模型筛选账号或 API Key。
@@ -120,6 +150,8 @@ struct ManageAccountsView: View {
             return account.participatesInSmartPool && !account.isAvailable
         case .excluded:
             return !account.participatesInSmartPool
+        case .deleted:
+            return false
         }
     }
 
@@ -138,7 +170,21 @@ struct ManageAccountsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .tag(account.id)
+    }
+
+    /// 已删除列表行只展示脱敏身份和连接类型。
+    private func deletedConnectionListRow(_ record: DeletedAccountRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(record.label)
+                .lineLimit(1)
+            Text(record.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(record.resolvedConnectionType == .apiKey ? "API Key" : "ChatGPT 账号")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 
     /// 合并列表中实际存在的 5 小时额度和 7 天额度。
@@ -190,12 +236,19 @@ struct ManageAccountsView: View {
             } label: {
                 Label("添加", systemImage: "plus")
             }
+
         }
     }
 
     private var selectedAccount: CodexAccount? {
         guard let selectedAccountID else { return nil }
         return filteredAccounts.first { $0.id == selectedAccountID }
+    }
+
+    /// 返回当前选中的已删除记录。
+    private var selectedDeletedConnection: DeletedAccountRecord? {
+        guard let selectedAccountID else { return nil }
+        return filteredDeletedAccounts.first { $0.id == selectedAccountID }
     }
 
     /// 无账号或筛选无结果时保持简洁空状态。
@@ -208,6 +261,60 @@ struct ManageAccountsView: View {
                 .font(.headline)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 已删除筛选无记录或搜索无结果时显示只读空状态。
+    private var deletedEmptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "archivebox")
+                .font(.system(size: 42))
+                .foregroundStyle(.secondary)
+            Text("没有已删除连接")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 在管理页右侧展示已删除连接的只读信息，不提供恢复或密钥查看能力。
+private struct DeletedConnectionDetailView: View {
+    let record: DeletedAccountRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 14) {
+                Image(systemName: record.resolvedConnectionType == .apiKey ? "key.slash" : "person.crop.circle.badge.xmark")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(record.label)
+                        .font(.title2.weight(.semibold))
+                    Text(record.detail)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 10) {
+                GridRow {
+                    Text("连接类型")
+                    Text(record.resolvedConnectionType == .apiKey ? "API Key" : "ChatGPT 账号")
+                }
+                GridRow {
+                    Text("删除时间")
+                    Text(record.deletedAt.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+
+            Text("这里只保留脱敏记录，不保存 Key 原文，也不提供恢复操作。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -396,7 +503,7 @@ private struct AccountDetailView: View {
                 Button(account.isActive ? "当前账号" : "设为当前") {
                     Task { await appState.switchAccount(accountKey: account.accountKey) }
                 }
-                .disabled(account.isActive || appState.isLoading)
+                .disabled(account.isActive || appState.isAccountSwitchInProgress)
             }
             Toggle(
                 "加入智能路由",
@@ -407,7 +514,7 @@ private struct AccountDetailView: View {
                     }
                 )
             )
-            .disabled(appState.isLoading)
+            .disabled(appState.smartPoolUpdatingAccountKey != nil)
         }
     }
 

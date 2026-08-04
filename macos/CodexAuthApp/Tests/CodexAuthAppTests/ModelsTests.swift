@@ -97,8 +97,8 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(state.resetCredits?.menuBarText, "重置 2次 · 7月30日 08:00")
     }
 
-    /// 验证旧 GUI 输出缺少智能池字段时仍默认加入，兼容 schema 5 之前的版本。
-    func testMissingSmartPoolFieldDefaultsToIncluded() throws {
+    /// 验证旧 GUI 输出缺少智能池字段时使用安全默认值排除智能路由。
+    func testMissingSmartPoolFieldDefaultsToExcluded() throws {
         let json = """
         {
           "account_key": "acct-legacy",
@@ -126,8 +126,41 @@ final class ModelsTests: XCTestCase {
 
         let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: json)
 
-        XCTAssertTrue(account.participatesInSmartPool)
+        XCTAssertFalse(account.participatesInSmartPool)
         XCTAssertTrue(account.isAvailable)
+    }
+
+    /// 验证旧删除记录可继续读取，并默认识别为 ChatGPT 账号。
+    func testDeletedConnectionRecordKeepsLegacyCompatibility() throws {
+        let data = Data(#"{"accountKey":"legacy","label":"旧账号","detail":"me***@example.com","deletedAt":0}"#.utf8)
+
+        let record = try JSONDecoder().decode(DeletedAccountRecord.self, from: data)
+
+        XCTAssertEqual(record.resolvedConnectionType, .account)
+    }
+
+    /// 验证旧版已删除 Key 可通过历史 Base URL 继续正确分类。
+    func testDeletedConnectionRecordInfersLegacyAPIKeyFromBaseURL() throws {
+        let data = Data(#"{"accountKey":"legacy-key","label":"旧 Key","detail":"https://api.openai.com/v1","deletedAt":0}"#.utf8)
+
+        let record = try JSONDecoder().decode(DeletedAccountRecord.self, from: data)
+
+        XCTAssertEqual(record.resolvedConnectionType, .apiKey)
+    }
+
+    /// 验证删除 API Key 时只保存脱敏展示信息和连接类型。
+    func testDeletedConnectionStoreRecordsAPIKeyTypeWithoutSecret() throws {
+        UserDefaults.standard.removeObject(forKey: "deleted-account-records")
+        defer { UserDefaults.standard.removeObject(forKey: "deleted-account-records") }
+        let data = Data(#"{"account_key":"key-1","display_name":"生产 Key","alias":"生产 Key","email":null,"account_name":"sk-masked","plan":null,"auth_mode":"apikey","smart_pool_enabled":false,"provider_kind":"openai","base_url":"https://api.openai.com/v1","balance":null,"is_active":false,"usage":{"five_hour":null,"seven_day":{"status":"not_applicable","remaining_percent":null,"total":null,"used":null,"reset_at":null}},"last_usage_at":null,"last_refresh_at":null}"#.utf8)
+        let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: data)
+
+        DeletedAccountStore.append(account)
+
+        let record = try XCTUnwrap(DeletedAccountStore.load().first)
+        XCTAssertEqual(record.resolvedConnectionType, .apiKey)
+        XCTAssertEqual(record.detail, "https://api.openai.com/v1")
+        XCTAssertFalse(record.label.contains("sk-"))
     }
 
     func testAccountLabelsUseMaskedEmailWhenAliasIsMissing() {
@@ -327,7 +360,24 @@ final class ModelsTests: XCTestCase {
 
         XCTAssertEqual(presentation.plainText, "12%")
         XCTAssertEqual(presentation.segments.map(\.tone), [.low])
-        XCTAssertLessThan(presentation.minimumStatusItemLength, 45)
+        XCTAssertLessThan(presentation.minimumStatusItemLength, 50)
+    }
+
+    /// 验证额度文案变化时状态项宽度保持稳定，且短文案仍围绕弹窗锚点居中。
+    func testStatusItemPresentationKeepsStableWidthAndCentersShortText() {
+        let unavailable = StatusItemPresentation(account: nil, isLoading: false)
+        let warning = StatusItemPresentation(
+            account: makeAccount(accountKey: "warning", remainingPercent: 26),
+            isLoading: false
+        )
+        let full = StatusItemPresentation(
+            account: makeAccount(accountKey: "full", remainingPercent: 100),
+            isLoading: false
+        )
+
+        XCTAssertEqual(unavailable.minimumStatusItemLength, warning.minimumStatusItemLength)
+        XCTAssertEqual(warning.minimumStatusItemLength, full.minimumStatusItemLength)
+        XCTAssertEqual(unavailable.horizontalOrigin(containerWidth: 42, contentWidth: 28), 7)
     }
 
     /// 验证缺少 5 小时窗口时菜单栏只保留周用量片段。
@@ -354,7 +404,7 @@ final class ModelsTests: XCTestCase {
 
         XCTAssertEqual(presentation.plainText, "93%")
         XCTAssertEqual(presentation.segments.map(\.tone), [.available])
-        XCTAssertLessThan(presentation.minimumStatusItemLength, 45)
+        XCTAssertLessThan(presentation.minimumStatusItemLength, 50)
         XCTAssertEqual(StatusItemPresentation.capsuleHorizontalPadding, 14)
         XCTAssertEqual(StatusItemPresentation.statusItemOuterPadding, 2)
     }

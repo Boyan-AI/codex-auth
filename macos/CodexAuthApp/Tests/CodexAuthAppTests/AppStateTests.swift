@@ -248,6 +248,7 @@ final class AppStateTests: XCTestCase {
         let client = StubCodexAuthClient(state: excludedState)
         client.smartPoolState = excludedState
         let appState = AppState(client: client)
+        await appState.refresh()
 
         await appState.setSmartPoolEnabled(accountKey: "acct-1", enabled: false)
 
@@ -259,19 +260,55 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-1", enabled: false)])
     }
 
-    /// 验证首次发现终止性认证错误时删除 CPA 副本，重复刷新不会重复执行同步。
-    func testTerminalAuthenticationFailurePausesCPARoutingOnce() async {
+    /// 验证 CPA 独立授权失败时不会提前提交智能池成员状态。
+    func testSmartPoolEnableCommitsOnlyAfterCPAAuthenticationSucceeds() async {
+        let initial = makeUsageState(remainingPercent: 80, status: "ok", smartPoolEnabled: false)
+        let client = StubCodexAuthClient(state: initial)
+        client.cpaSyncError = CPARuntimeError.oauthTimedOut
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        await appState.setSmartPoolEnabled(accountKey: "acct-alert", enabled: true)
+
+        XCTAssertNil(client.smartPoolAccountKey)
+        XCTAssertFalse(appState.state?.accounts.first?.participatesInSmartPool ?? true)
+        XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-alert", enabled: true)])
+        XCTAssertEqual(appState.errorMessage, CPARuntimeError.oauthTimedOut.localizedDescription)
+    }
+
+    /// 验证智能路由等待浏览器授权时只暴露账号级忙状态，供界面精确禁用开关。
+    func testSmartPoolUpdateUsesOperationScopedBusyState() async {
+        let initial = makeUsageState(remainingPercent: 80, status: "ok", smartPoolEnabled: false)
+        let client = StubCodexAuthClient(state: initial)
+        client.shouldDelayCPASync = true
+        let appState = AppState(client: client)
+        await appState.refresh()
+
+        let update = Task {
+            await appState.setSmartPoolEnabled(accountKey: "acct-alert", enabled: true)
+        }
+        await client.waitUntilCPASyncStarted()
+
+        XCTAssertEqual(appState.smartPoolUpdatingAccountKey, "acct-alert")
+
+        client.finishCPASync()
+        await update.value
+        XCTAssertNil(appState.smartPoolUpdatingAccountKey)
+    }
+
+    /// 验证直连终止性认证错误不会停用 CPA 的独立 OAuth 会话。
+    func testTerminalAuthenticationFailureDoesNotChangeCPARouting() async {
         let client = StubCodexAuthClient(state: makeUsageState(status: "401 token_invalidated"))
         let appState = AppState(client: client)
 
         await appState.refresh()
         await appState.refresh()
 
-        XCTAssertEqual(client.cpaSyncCalls, [CPAAccountSyncCall(accountKey: "acct-alert", enabled: false)])
+        XCTAssertTrue(client.cpaSyncCalls.isEmpty)
     }
 
-    /// 验证被认证错误自动暂停的账号在重新认证并刷新成功后恢复 CPA 副本。
-    func testRecoveredAuthenticationRestoresCPARouting() async {
+    /// 验证直连账号恢复也不会覆盖或重启 CPA 的独立 OAuth 会话。
+    func testRecoveredDirectAuthenticationDoesNotChangeCPARouting() async {
         let client = StubCodexAuthClient(state: makeUsageState(status: "401 token_revoked"))
         let appState = AppState(client: client)
         await appState.refresh()
@@ -279,10 +316,7 @@ final class AppStateTests: XCTestCase {
         client.state = makeUsageState(remainingPercent: 80, status: "ok")
         await appState.refresh()
 
-        XCTAssertEqual(client.cpaSyncCalls, [
-            CPAAccountSyncCall(accountKey: "acct-alert", enabled: false),
-            CPAAccountSyncCall(accountKey: "acct-alert", enabled: true),
-        ])
+        XCTAssertTrue(client.cpaSyncCalls.isEmpty)
     }
 
     /// 验证用户明确排除的账号即使状态恢复，也不会被自动重新加入 CPA。
@@ -605,13 +639,17 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var refreshCallCount = 0
     var tokenUsageCallModes: [TokenUsageScanMode] = []
     var cpaSyncCalls: [CPAAccountSyncCall] = []
+    var cpaSyncError: Error?
     var cpaReconcileCallCount = 0
     var cpaReconcileError: Error?
     var startupOperationCalls: [String] = []
     var cpaEventBatch: CPAEventBatch = .empty
     var shouldDelaySwitch = false
+    var shouldDelayCPASync = false
     private var switchContinuation: CheckedContinuation<Void, Never>?
     private var switchStartedContinuation: CheckedContinuation<Void, Never>?
+    private var cpaSyncContinuation: CheckedContinuation<Void, Never>?
+    private var cpaSyncStartedContinuation: CheckedContinuation<Void, Never>?
     private(set) var switchCallCount = 0
 
     init(state: CodexAuthState) {
@@ -688,6 +726,28 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     /// 记录 AppState 发出的 CPA 凭据同步请求。
     func syncCPAAccount(accountKey: String, enabled: Bool) async throws {
         cpaSyncCalls.append(CPAAccountSyncCall(accountKey: accountKey, enabled: enabled))
+        if shouldDelayCPASync {
+            await withCheckedContinuation { continuation in
+                cpaSyncContinuation = continuation
+                cpaSyncStartedContinuation?.resume()
+                cpaSyncStartedContinuation = nil
+            }
+        }
+        if let cpaSyncError { throw cpaSyncError }
+    }
+
+    /// 等待 CPA 同步进入挂起状态，避免测试依赖固定延迟。
+    func waitUntilCPASyncStarted() async {
+        if cpaSyncContinuation != nil { return }
+        await withCheckedContinuation { continuation in
+            cpaSyncStartedContinuation = continuation
+        }
+    }
+
+    /// 恢复挂起的 CPA 同步。
+    func finishCPASync() {
+        cpaSyncContinuation?.resume()
+        cpaSyncContinuation = nil
     }
 
     /// 记录启动 CPA 全目录对账，并按需注入可恢复错误。

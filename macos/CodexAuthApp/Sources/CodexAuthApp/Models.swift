@@ -153,14 +153,30 @@ struct TokenUsageQuality: Decodable, Equatable {
     }
 }
 
-/// 记录由菜单栏 App 删除的账号，避免账号从主列表消失后无法追踪。
+/// 区分已删除的 ChatGPT 账号与 API Key 连接，不包含任何密钥内容。
+enum DeletedConnectionType: String, Codable {
+    case account
+    case apiKey
+}
+
+/// 记录由菜单栏 App 删除的连接，避免其从主列表消失后无法追踪。
 struct DeletedAccountRecord: Codable, Equatable, Identifiable {
     let accountKey: String
     let label: String
     let detail: String
     let deletedAt: Date
+    let connectionType: DeletedConnectionType?
 
     var id: String { accountKey }
+
+    /// 旧记录缺少类型字段时用历史 Key 的 Base URL 特征兼容识别。
+    var resolvedConnectionType: DeletedConnectionType {
+        if let connectionType { return connectionType }
+        guard let scheme = URL(string: detail)?.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
+            return .account
+        }
+        return .apiKey
+    }
 }
 
 /// 使用 App 自己的偏好存储持久化失效账号清单，不改动 Codex 原始账号文件。
@@ -183,7 +199,8 @@ enum DeletedAccountStore {
                 accountKey: account.accountKey,
                 label: account.primaryLabel,
                 detail: account.secondaryLabel,
-                deletedAt: Date()
+                deletedAt: Date(),
+                connectionType: account.isAPIKey ? .apiKey : .account
             ),
             at: 0
         )
@@ -266,9 +283,9 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
         return "\(balance.amount) \(balance.currency)"
     }
 
-    /// 兼容尚未输出 schema 5 字段的旧 GUI 后端，缺失时默认加入智能池。
+    /// 兼容缺失智能池字段的状态，按安全默认值不加入智能路由。
     var participatesInSmartPool: Bool {
-        smartPoolEnabled ?? true
+        smartPoolEnabled ?? false
     }
 
     /// 仅识别要求重新登录的终止性认证错误，避免临时网络或额度错误误暂停路由。
