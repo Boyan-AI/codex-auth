@@ -57,18 +57,13 @@ struct AccountRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    /// 账号使用圆形图标，Key 使用方形图标；选择状态只由背景表达。
+    /// 账号与 Key 都使用系统图标；选择状态只由背景表达。
     @ViewBuilder
     private var connectionIcon: some View {
         if account.isAPIKey {
-            Text("K")
-                .font(.caption.weight(.semibold))
+            Image(systemName: "key.fill")
+                .font(.title3)
                 .foregroundStyle(Color.orange)
-                .frame(width: 24, height: 24)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.orange, lineWidth: 1.5)
-                }
         } else {
             Image(systemName: "person.crop.circle")
                 .font(.title2)

@@ -363,6 +363,40 @@ final class ModelsTests: XCTestCase {
         XCTAssertLessThan(presentation.minimumStatusItemLength, 50)
     }
 
+    /// 验证 API Key 直连在菜单栏显示明确模式，不使用缺失额度占位符。
+    func testStatusItemPresentationShowsAPIKeyMode() {
+        let account = CodexAccount(
+            accountKey: "key-agent-router",
+            displayName: "AgentRouter",
+            alias: "AgentRouter",
+            email: nil,
+            accountName: "sk-test",
+            plan: nil,
+            authMode: "apikey",
+            smartPoolEnabled: false,
+            providerKind: "relay",
+            baseURL: "https://agentrouter.org/v1",
+            isActive: true,
+            usage: UsageInfo(
+                fiveHour: nil,
+                sevenDay: UsageWindow(
+                    status: "not_applicable",
+                    remainingPercent: nil,
+                    total: nil,
+                    used: nil,
+                    resetAt: nil
+                )
+            ),
+            lastUsageAt: nil,
+            lastRefreshAt: nil
+        )
+
+        let presentation = StatusItemPresentation(account: account, isLoading: false)
+
+        XCTAssertEqual(presentation.plainText, "KEY")
+        XCTAssertEqual(presentation.segments.map(\.tone), [.unavailable])
+    }
+
     /// 验证额度文案变化时状态项宽度保持稳定，且短文案仍围绕弹窗锚点居中。
     func testStatusItemPresentationKeepsStableWidthAndCentersShortText() {
         let unavailable = StatusItemPresentation(account: nil, isLoading: false)

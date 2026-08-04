@@ -21,6 +21,10 @@ struct StatusItemPresentation: Equatable {
         self.isLoading = isLoading
         // 顶部状态栏只显示周用量百分比；reset 详情仅展示在账号展开行中。
         _ = resetCredits
+        if account?.isAPIKey == true {
+            self.segments = [StatusItemSegment(text: "KEY", tone: .unavailable)]
+            return
+        }
         self.segments = [
             StatusItemSegment(
                 text: account?.usage.sevenDay.menuBarPercentText ?? "--",
