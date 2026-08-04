@@ -1356,7 +1356,60 @@ test "activateAccountByKey routes relay key through its base url and preserves u
     try expectModeUnix(config_path, 0o644);
 }
 
-test "syncActiveCodexConfig migrates official account and creates private config" {
+test "activateAccountByKey clears API routing when switching back to ChatGPT account" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const record = try makeAccountRecord(gpa, "official@example.com", "official", .plus, .chatgpt, 1);
+    try reg.accounts.append(gpa, record);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record.account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &.{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    const account_auth = try authJsonWithEmailPlan(gpa, "official@example.com", "plus");
+    defer gpa.free(account_auth);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = account_auth });
+
+    const original_config =
+        \\model = "gpt-5"
+        \\model_provider = "openai"
+        \\openai_base_url = "https://api.openai.com/v1"
+        \\# keep this comment
+        \\[features]
+        \\apps = true
+        \\
+    ;
+    try tmp.dir.writeFile(.{ .sub_path = "config.toml", .data = original_config });
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    try setModeUnix(config_path, 0o644);
+
+    try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
+
+    var config_file = try fs.cwd().openFile(config_path, .{});
+    defer config_file.close();
+    const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(config);
+    const expected_config =
+        \\model = "gpt-5"
+        \\# keep this comment
+        \\[features]
+        \\apps = true
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected_config, config);
+    try expectModeUnix(config_path, 0o644);
+}
+
+test "syncActiveCodexConfig leaves ChatGPT account without config file" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1375,15 +1428,7 @@ test "syncActiveCodexConfig migrates official account and creates private config
 
     const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
     defer gpa.free(config_path);
-    var config_file = try fs.cwd().openFile(config_path, .{});
-    defer config_file.close();
-    const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
-    defer gpa.free(config);
-    try std.testing.expectEqualStrings(
-        "model_provider = \"openai\"\nopenai_base_url = \"https://api.openai.com/v1\"\n",
-        config,
-    );
-    try expectModeUnix(config_path, 0o600);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(config_path));
 }
 
 test "sync active auth matches by email and updates account auth" {

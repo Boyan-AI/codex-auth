@@ -544,7 +544,7 @@ pub fn activateAccountByKey(
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
-/// 按当前活动连接同步 Codex 全局 provider 与 Base URL，供已有安装启动时补齐配置。
+/// 按当前活动连接同步 Codex 全局路由；API Key 写入 provider，ChatGPT 账号清理 Key 路由。
 pub fn syncActiveCodexConfig(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -562,23 +562,20 @@ pub fn syncActiveCodexConfig(
     try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[resolved_index]);
 }
 
-/// 将指定连接映射为内置 OpenAI provider 的全局路由配置。
+/// 将指定连接映射到 Codex 全局路由配置，避免 ChatGPT 账号继承 API Key 路由。
 fn syncCodexConfigForAccount(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     account: *const AccountRecord,
 ) !void {
-    const base_url = if (account.provider_kind == .relay) blk: {
-        const relay_base_url = account.base_url orelse return error.InvalidBaseURL;
-        if (relay_base_url.len == 0) return error.InvalidBaseURL;
-        break :blk relay_base_url;
-    } else official_openai_base_url;
-
     const config_path = try std.fs.path.join(allocator, &.{ codex_home, codex_config_file_name });
     defer allocator.free(config_path);
-    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), codex_home);
 
     const existing_permissions = try common.existingFilePermissions(config_path);
+    const base_url = try codexRoutingBaseURLForAccount(account);
+    if (existing_permissions == null and base_url == null) return;
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), codex_home);
+
     const data = blk: {
         var file = std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{}) catch |err| switch (err) {
             error.FileNotFound => break :blk try allocator.dupe(u8, ""),
@@ -606,16 +603,27 @@ fn syncCodexConfigForAccount(
     if (existing_permissions == null) try hardenSensitiveFile(config_path);
 }
 
-/// 只重写 TOML 根级路由键，保留其余配置、注释与表结构。
+/// 只让 API Key 连接改写 Codex provider；账号订阅模式返回 null 以清理托管路由键。
+fn codexRoutingBaseURLForAccount(account: *const AccountRecord) !?[]const u8 {
+    if (account.auth_mode == null or account.auth_mode.? != .apikey) return null;
+    if (account.provider_kind == .relay) {
+        const relay_base_url = account.base_url orelse return error.InvalidBaseURL;
+        if (relay_base_url.len == 0) return error.InvalidBaseURL;
+        return relay_base_url;
+    }
+    return official_openai_base_url;
+}
+
+/// 同步 TOML 根级路由键，传入 null 时仅清理托管键并保留其他内容。
 fn updateCodexRoutingSettingsAlloc(
     allocator: std.mem.Allocator,
     data: []const u8,
-    base_url: []const u8,
+    base_url: ?[]const u8,
 ) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     var offset: usize = 0;
-    var settings_inserted = false;
+    var root_settings_closed = false;
 
     while (offset < data.len) {
         const line_start = offset;
@@ -623,11 +631,11 @@ fn updateCodexRoutingSettingsAlloc(
         const line_end = if (newline < data.len) newline + 1 else newline;
         const line = std.mem.trim(u8, data[line_start..newline], " \t\r");
 
-        if (!settings_inserted and isTomlSection(line)) {
-            try appendCodexRoutingSettings(allocator, &out, base_url);
-            settings_inserted = true;
+        if (!root_settings_closed and isTomlSection(line)) {
+            if (base_url) |url| try appendCodexRoutingSettings(allocator, &out, url);
+            root_settings_closed = true;
         }
-        if (!settings_inserted and isManagedRootSetting(line)) {
+        if (!root_settings_closed and isManagedRootSetting(line)) {
             offset = line_end;
             continue;
         }
@@ -635,7 +643,9 @@ fn updateCodexRoutingSettingsAlloc(
         offset = line_end;
     }
 
-    if (!settings_inserted) try appendCodexRoutingSettings(allocator, &out, base_url);
+    if (!root_settings_closed) {
+        if (base_url) |url| try appendCodexRoutingSettings(allocator, &out, url);
+    }
     return try out.toOwnedSlice(allocator);
 }
 
