@@ -28,8 +28,14 @@ const backupAuthIfChanged = clean.backupAuthIfChanged;
 const resolveStrictAccountAuthPath = clean.resolveStrictAccountAuthPath;
 
 const codex_config_file_name = "config.toml";
+const model_setting_key = "model";
 const model_provider_setting_key = "model_provider";
 const openai_base_url_setting_key = "openai_base_url";
+const service_tier_setting_key = "service_tier";
+const approvals_reviewer_setting_key = "approvals_reviewer";
+const disable_response_storage_setting_key = "disable_response_storage";
+const managed_custom_provider_section = "[model_providers.custom]";
+const managed_model = "gpt-5.6-sol";
 const official_openai_base_url = "https://api.openai.com/v1";
 
 pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, api_key: []const u8) ![]u8 {
@@ -544,7 +550,7 @@ pub fn activateAccountByKey(
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
-/// 按当前活动连接同步 Codex 全局路由；API Key 写入 provider，ChatGPT 账号清理 Key 路由。
+/// 按当前活动连接同步 Codex 全局预设；API Key 写入自定义 provider，ChatGPT 账号恢复账号预设。
 pub fn syncActiveCodexConfig(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -562,7 +568,7 @@ pub fn syncActiveCodexConfig(
     try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[resolved_index]);
 }
 
-/// 将指定连接映射到 Codex 全局路由配置，避免 ChatGPT 账号继承 API Key 路由。
+/// 将指定连接映射到 Codex 全局配置预设，避免账号与 API Key 继承彼此的专属设置。
 fn syncCodexConfigForAccount(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -573,7 +579,6 @@ fn syncCodexConfigForAccount(
 
     const existing_permissions = try common.existingFilePermissions(config_path);
     const base_url = try codexRoutingBaseURLForAccount(account);
-    if (existing_permissions == null and base_url == null) return;
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), codex_home);
 
     const data = blk: {
@@ -586,7 +591,7 @@ fn syncCodexConfigForAccount(
     };
     defer allocator.free(data);
 
-    const updated = try updateCodexRoutingSettingsAlloc(allocator, data, base_url);
+    const updated = try updateCodexPresetSettingsAlloc(allocator, data, base_url);
     defer allocator.free(updated);
     if (std.mem.eql(u8, data, updated)) return;
 
@@ -614,8 +619,8 @@ fn codexRoutingBaseURLForAccount(account: *const AccountRecord) !?[]const u8 {
     return official_openai_base_url;
 }
 
-/// 同步 TOML 根级路由键，传入 null 时仅清理托管键并保留其他内容。
-fn updateCodexRoutingSettingsAlloc(
+/// 同步 TOML 根级预设与 custom provider 表，传入 null 时写入 ChatGPT 账号预设。
+fn updateCodexPresetSettingsAlloc(
     allocator: std.mem.Allocator,
     data: []const u8,
     base_url: ?[]const u8,
@@ -624,6 +629,9 @@ fn updateCodexRoutingSettingsAlloc(
     errdefer out.deinit(allocator);
     var offset: usize = 0;
     var root_settings_closed = false;
+    var skipping_custom_provider = false;
+    var pending_root_blank_start: ?usize = null;
+    var pending_root_blank_end: usize = 0;
 
     while (offset < data.len) {
         const line_start = offset;
@@ -631,20 +639,47 @@ fn updateCodexRoutingSettingsAlloc(
         const line_end = if (newline < data.len) newline + 1 else newline;
         const line = std.mem.trim(u8, data[line_start..newline], " \t\r");
 
+        if (skipping_custom_provider) {
+            if (!isTomlSection(line)) {
+                offset = line_end;
+                continue;
+            }
+            skipping_custom_provider = false;
+        }
+        if (isManagedCustomProviderSection(line)) {
+            pending_root_blank_start = null;
+            skipping_custom_provider = true;
+            offset = line_end;
+            continue;
+        }
+        if (!root_settings_closed and line.len == 0) {
+            if (pending_root_blank_start == null) pending_root_blank_start = line_start;
+            pending_root_blank_end = line_end;
+            offset = line_end;
+            continue;
+        }
         if (!root_settings_closed and isTomlSection(line)) {
-            if (base_url) |url| try appendCodexRoutingSettings(allocator, &out, url);
+            pending_root_blank_start = null;
+            try appendCodexPresetSettings(allocator, &out, base_url);
             root_settings_closed = true;
         }
         if (!root_settings_closed and isManagedRootSetting(line)) {
+            pending_root_blank_start = null;
             offset = line_end;
             continue;
+        }
+        if (!root_settings_closed) {
+            if (pending_root_blank_start) |blank_start| {
+                try out.appendSlice(allocator, data[blank_start..pending_root_blank_end]);
+                pending_root_blank_start = null;
+            }
         }
         try out.appendSlice(allocator, data[line_start..line_end]);
         offset = line_end;
     }
 
     if (!root_settings_closed) {
-        if (base_url) |url| try appendCodexRoutingSettings(allocator, &out, url);
+        try appendCodexPresetSettings(allocator, &out, base_url);
     }
     return try out.toOwnedSlice(allocator);
 }
@@ -654,26 +689,46 @@ fn isTomlSection(line: []const u8) bool {
     return std.mem.startsWith(u8, line, "[");
 }
 
-/// 识别由连接切换统一管理的两个 TOML 根级键。
+/// 识别由连接切换统一管理的 TOML 根级键，不接管用户的 reasoning effort。
 fn isManagedRootSetting(line: []const u8) bool {
     if (line.len == 0 or line[0] == '#') return false;
     const equals_index = std.mem.indexOfScalar(u8, line, '=') orelse return false;
     const key = std.mem.trim(u8, line[0..equals_index], " \t\r");
-    return std.mem.eql(u8, key, model_provider_setting_key) or
-        std.mem.eql(u8, key, openai_base_url_setting_key);
+    return std.mem.eql(u8, key, model_setting_key) or
+        std.mem.eql(u8, key, model_provider_setting_key) or
+        std.mem.eql(u8, key, openai_base_url_setting_key) or
+        std.mem.eql(u8, key, service_tier_setting_key) or
+        std.mem.eql(u8, key, approvals_reviewer_setting_key) or
+        std.mem.eql(u8, key, disable_response_storage_setting_key);
 }
 
-/// 追加 Codex Auth 管理的根级 provider 与 Base URL 设置。
-fn appendCodexRoutingSettings(
+/// 判断当前 TOML 表是否为 Codex Auth 按 CC Switch 格式托管的 custom provider。
+fn isManagedCustomProviderSection(line: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, managed_custom_provider_section)) return false;
+    const suffix = line[managed_custom_provider_section.len..];
+    return suffix.len == 0 or suffix[0] == '#' or suffix[0] == ' ' or suffix[0] == '\t';
+}
+
+/// 追加账号或 API Key 对应的 Codex Auth 托管配置，保留 reasoning effort 的默认行为。
+fn appendCodexPresetSettings(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    base_url: []const u8,
+    base_url: ?[]const u8,
 ) !void {
     if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') try out.append(allocator, '\n');
-    try out.appendSlice(allocator, model_provider_setting_key ++ " = \"openai\"\n");
-    try out.appendSlice(allocator, openai_base_url_setting_key ++ " = \"");
-    try appendTomlBasicStringContent(allocator, out, base_url);
-    try out.appendSlice(allocator, "\"\n");
+    if (base_url) |url| {
+        try out.appendSlice(allocator, model_provider_setting_key ++ " = \"custom\"\n");
+        try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
+        try out.appendSlice(allocator, disable_response_storage_setting_key ++ " = true\n\n");
+        try out.appendSlice(allocator, managed_custom_provider_section ++ "\n");
+        try out.appendSlice(allocator, "name = \"Sub2API\"\nbase_url = \"");
+        try appendTomlBasicStringContent(allocator, out, url);
+        try out.appendSlice(allocator, "\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n");
+        return;
+    }
+    try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
+    try out.appendSlice(allocator, service_tier_setting_key ++ " = \"default\"\n");
+    try out.appendSlice(allocator, approvals_reviewer_setting_key ++ " = \"auto_review\"\n\n");
 }
 
 /// 转义 TOML 基本字符串内容，避免 Base URL 破坏全局配置语法。

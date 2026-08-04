@@ -58,3 +58,8 @@ When switching succeeds:
 3. `active_account_key` is updated in `registry.json`.
 4. `previous_active_account_key` records the account that was active before the switch, when one exists.
 5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
+6. `~/.codex/config.toml` is patched for the selected connection while unrelated settings, tables, comments, and file permissions are preserved.
+
+ChatGPT account selections set the managed model and account defaults, and remove the API-key-only custom provider. API key selections use the CC Switch-compatible `model_provider = "custom"` and `[model_providers.custom]` format with the selected connection's Base URL. Switching does not manage `model_reasoning_effort`; an existing value is preserved, and an absent value continues to use the Codex default.
+
+Configuration changes apply to newly started Codex processes or threads. Existing processes do not reload `config.toml` automatically. Because Codex associates session visibility with the active model provider, sessions created with the built-in OpenAI provider may be hidden while the custom provider is active; switching back to a ChatGPT account makes those sessions visible again without deleting their files.

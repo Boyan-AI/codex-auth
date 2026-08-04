@@ -1325,9 +1325,15 @@ test "activateAccountByKey routes relay key through its base url and preserves u
 
     const original_config =
         \\model = "gpt-5"
+        \\model_reasoning_effort = "high"
         \\model_provider = "custom" # stale route
         \\openai_base_url = "https://old.example/v1"
         \\# keep this comment
+        \\[model_providers.custom]
+        \\name = "stale"
+        \\base_url = "https://stale.example/v1"
+        \\wire_api = "responses"
+        \\requires_openai_auth = true
         \\[features]
         \\apps = true
         \\
@@ -1338,22 +1344,65 @@ test "activateAccountByKey routes relay key through its base url and preserves u
     try setModeUnix(config_path, 0o644);
 
     try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
+    try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
 
     var config_file = try fs.cwd().openFile(config_path, .{});
     defer config_file.close();
     const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
     defer gpa.free(config);
     const expected_config =
-        \\model = "gpt-5"
+        \\model_reasoning_effort = "high"
         \\# keep this comment
-        \\model_provider = "openai"
-        \\openai_base_url = "https://agentrouter.org/v1"
+        \\model_provider = "custom"
+        \\model = "gpt-5.6-sol"
+        \\disable_response_storage = true
+        \\
+        \\[model_providers.custom]
+        \\name = "Sub2API"
+        \\base_url = "https://agentrouter.org/v1"
+        \\wire_api = "responses"
+        \\requires_openai_auth = true
+        \\
         \\[features]
         \\apps = true
         \\
     ;
     try std.testing.expectEqualStrings(expected_config, config);
     try expectModeUnix(config_path, 0o644);
+}
+
+test "activateAccountByKey uses the official base url for an OpenAI API key" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var record = try makeAccountRecord(gpa, "official-key@example.com", "official-key", null, .apikey, 1);
+    record.provider_kind = .openai;
+    try reg.accounts.append(gpa, record);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record.account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &.{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
+
+    try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
+
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    var config_file = try fs.cwd().openFile(config_path, .{});
+    defer config_file.close();
+    const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "model_provider = \"custom\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "base_url = \"https://api.openai.com/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "openai_base_url") == null);
 }
 
 test "activateAccountByKey clears API routing when switching back to ChatGPT account" {
@@ -1380,9 +1429,16 @@ test "activateAccountByKey clears API routing when switching back to ChatGPT acc
 
     const original_config =
         \\model = "gpt-5"
-        \\model_provider = "openai"
+        \\model_reasoning_effort = "max"
+        \\model_provider = "custom"
+        \\disable_response_storage = true
         \\openai_base_url = "https://api.openai.com/v1"
         \\# keep this comment
+        \\[model_providers.custom]
+        \\name = "Sub2API"
+        \\base_url = "https://relay.example/v1"
+        \\wire_api = "responses"
+        \\requires_openai_auth = true
         \\[features]
         \\apps = true
         \\
@@ -1393,14 +1449,19 @@ test "activateAccountByKey clears API routing when switching back to ChatGPT acc
     try setModeUnix(config_path, 0o644);
 
     try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
+    try registry.activateAccountByKey(gpa, codex_home, &reg, record.account_key);
 
     var config_file = try fs.cwd().openFile(config_path, .{});
     defer config_file.close();
     const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
     defer gpa.free(config);
     const expected_config =
-        \\model = "gpt-5"
+        \\model_reasoning_effort = "max"
         \\# keep this comment
+        \\model = "gpt-5.6-sol"
+        \\service_tier = "default"
+        \\approvals_reviewer = "auto_review"
+        \\
         \\[features]
         \\apps = true
         \\
@@ -1409,7 +1470,7 @@ test "activateAccountByKey clears API routing when switching back to ChatGPT acc
     try expectModeUnix(config_path, 0o644);
 }
 
-test "syncActiveCodexConfig leaves ChatGPT account without config file" {
+test "syncActiveCodexConfig creates idempotent ChatGPT account preset" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1428,7 +1489,16 @@ test "syncActiveCodexConfig leaves ChatGPT account without config file" {
 
     const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
     defer gpa.free(config_path);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(config_path));
+    var config_file = try fs.cwd().openFile(config_path, .{});
+    defer config_file.close();
+    const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(config);
+    const expected_config =
+        "model = \"gpt-5.6-sol\"\n" ++
+        "service_tier = \"default\"\n" ++
+        "approvals_reviewer = \"auto_review\"\n\n";
+    try std.testing.expectEqualStrings(expected_config, config);
+    try expectModeUnix(config_path, 0o600);
 }
 
 test "sync active auth matches by email and updates account auth" {
