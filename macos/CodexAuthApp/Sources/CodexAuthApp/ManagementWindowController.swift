@@ -148,6 +148,7 @@ final class ManagementWindowController: NSObject, NSWindowDelegate {
             loginWindow.center()
             loginWindow.isReleasedWhenClosed = false
             loginWindow.hidesOnDeactivate = false
+            loginWindow.level = .floating
             self.loginWindow = loginWindow
             loginWindow.makeKeyAndOrderFront(nil)
         }
