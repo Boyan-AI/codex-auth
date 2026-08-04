@@ -141,6 +141,7 @@ pub const shouldFetchTeamAccountNamesForUser = account_ops.shouldFetchTeamAccoun
 pub const activeChatgptUserId = account_ops.activeChatgptUserId;
 pub const applyAccountNamesForUser = account_ops.applyAccountNamesForUser;
 pub const activateAccountByKey = account_ops.activateAccountByKey;
+pub const syncActiveCodexConfig = account_ops.syncActiveCodexConfig;
 pub const replaceActiveAuthWithAccountByKey = account_ops.replaceActiveAuthWithAccountByKey;
 pub const replaceActiveAuthWithAccountByKeyPreservingPrevious = account_ops.replaceActiveAuthWithAccountByKeyPreservingPrevious;
 pub const accountFromAuth = account_ops.accountFromAuth;

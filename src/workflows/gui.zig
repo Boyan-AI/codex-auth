@@ -203,6 +203,8 @@ fn handleState(
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    // 启动 GUI 时迁移当前连接的全局路由配置，避免旧安装必须来回切换一次。
+    try registry.syncActiveCodexConfig(allocator, codex_home, &reg);
     const attempted = force_refresh;
     var refresh_state: ?usage_refresh.ForegroundUsageRefreshState = null;
     defer if (refresh_state) |*state| state.deinit(allocator);

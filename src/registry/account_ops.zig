@@ -27,6 +27,11 @@ const backupDir = clean.backupDir;
 const backupAuthIfChanged = clean.backupAuthIfChanged;
 const resolveStrictAccountAuthPath = clean.resolveStrictAccountAuthPath;
 
+const codex_config_file_name = "config.toml";
+const model_provider_setting_key = "model_provider";
+const openai_base_url_setting_key = "openai_base_url";
+const official_openai_base_url = "https://api.openai.com/v1";
+
 pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, api_key: []const u8) ![]u8 {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
@@ -526,7 +531,7 @@ pub fn activateAccountByKey(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
-    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const account_index = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
 
@@ -535,7 +540,149 @@ pub fn activateAccountByKey(
 
     try backupAuthIfChanged(allocator, codex_home, dest, src);
     try replaceFilePreservingPermissions(src, dest);
+    try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[account_index]);
     try setActiveAccountKey(allocator, reg, account_key);
+}
+
+/// 按当前活动连接同步 Codex 全局 provider 与 Base URL，供已有安装启动时补齐配置。
+pub fn syncActiveCodexConfig(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+) !void {
+    const account_key = reg.active_account_key orelse return;
+    var account_index: ?usize = null;
+    for (reg.accounts.items, 0..) |account, index| {
+        if (std.mem.eql(u8, account.account_key, account_key)) {
+            account_index = index;
+            break;
+        }
+    }
+    const resolved_index = account_index orelse return error.AccountNotFound;
+    try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[resolved_index]);
+}
+
+/// 将指定连接映射为内置 OpenAI provider 的全局路由配置。
+fn syncCodexConfigForAccount(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    account: *const AccountRecord,
+) !void {
+    const base_url = if (account.provider_kind == .relay) blk: {
+        const relay_base_url = account.base_url orelse return error.InvalidBaseURL;
+        if (relay_base_url.len == 0) return error.InvalidBaseURL;
+        break :blk relay_base_url;
+    } else official_openai_base_url;
+
+    const config_path = try std.fs.path.join(allocator, &.{ codex_home, codex_config_file_name });
+    defer allocator.free(config_path);
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), codex_home);
+
+    const existing_permissions = try common.existingFilePermissions(config_path);
+    const data = blk: {
+        var file = std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk try allocator.dupe(u8, ""),
+            else => return err,
+        };
+        defer file.close(app_runtime.io());
+        break :blk try common.readFileAlloc(file, allocator, 1024 * 1024);
+    };
+    defer allocator.free(data);
+
+    const updated = try updateCodexRoutingSettingsAlloc(allocator, data, base_url);
+    defer allocator.free(updated);
+    if (std.mem.eql(u8, data, updated)) return;
+
+    var buffer: [4096]u8 = undefined;
+    var atomic_file = try std.Io.Dir.cwd().createFileAtomic(app_runtime.io(), config_path, .{
+        .replace = true,
+        .permissions = existing_permissions orelse common.private_file_permissions,
+    });
+    defer atomic_file.deinit(app_runtime.io());
+    var writer = atomic_file.file.writer(app_runtime.io(), &buffer);
+    try writer.interface.writeAll(updated);
+    try writer.interface.flush();
+    try atomic_file.replace(app_runtime.io());
+    if (existing_permissions == null) try hardenSensitiveFile(config_path);
+}
+
+/// 只重写 TOML 根级路由键，保留其余配置、注释与表结构。
+fn updateCodexRoutingSettingsAlloc(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    base_url: []const u8,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var offset: usize = 0;
+    var settings_inserted = false;
+
+    while (offset < data.len) {
+        const line_start = offset;
+        const newline = std.mem.indexOfScalarPos(u8, data, offset, '\n') orelse data.len;
+        const line_end = if (newline < data.len) newline + 1 else newline;
+        const line = std.mem.trim(u8, data[line_start..newline], " \t\r");
+
+        if (!settings_inserted and isTomlSection(line)) {
+            try appendCodexRoutingSettings(allocator, &out, base_url);
+            settings_inserted = true;
+        }
+        if (!settings_inserted and isManagedRootSetting(line)) {
+            offset = line_end;
+            continue;
+        }
+        try out.appendSlice(allocator, data[line_start..line_end]);
+        offset = line_end;
+    }
+
+    if (!settings_inserted) try appendCodexRoutingSettings(allocator, &out, base_url);
+    return try out.toOwnedSlice(allocator);
+}
+
+/// 判断当前行是否开始 TOML 表；根级设置必须插入到首个表之前。
+fn isTomlSection(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "[");
+}
+
+/// 识别由连接切换统一管理的两个 TOML 根级键。
+fn isManagedRootSetting(line: []const u8) bool {
+    if (line.len == 0 or line[0] == '#') return false;
+    const equals_index = std.mem.indexOfScalar(u8, line, '=') orelse return false;
+    const key = std.mem.trim(u8, line[0..equals_index], " \t\r");
+    return std.mem.eql(u8, key, model_provider_setting_key) or
+        std.mem.eql(u8, key, openai_base_url_setting_key);
+}
+
+/// 追加 Codex Auth 管理的根级 provider 与 Base URL 设置。
+fn appendCodexRoutingSettings(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    base_url: []const u8,
+) !void {
+    if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') try out.append(allocator, '\n');
+    try out.appendSlice(allocator, model_provider_setting_key ++ " = \"openai\"\n");
+    try out.appendSlice(allocator, openai_base_url_setting_key ++ " = \"");
+    try appendTomlBasicStringContent(allocator, out, base_url);
+    try out.appendSlice(allocator, "\"\n");
+}
+
+/// 转义 TOML 基本字符串内容，避免 Base URL 破坏全局配置语法。
+fn appendTomlBasicStringContent(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    value: []const u8,
+) !void {
+    for (value) |byte| {
+        switch (byte) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            0...8, 11...12, 14...0x1f, 0x7f => return error.InvalidBaseURL,
+            else => try out.append(allocator, byte),
+        }
+    }
 }
 
 pub fn replaceActiveAuthWithAccountByKey(
