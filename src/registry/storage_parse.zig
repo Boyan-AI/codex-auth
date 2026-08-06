@@ -50,7 +50,6 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
         .last_local_rollout = null,
-        .smart_pool_enabled = parseSmartPoolEnabled(obj.get("smart_pool_enabled")),
         .provider_kind = parseProviderKind(obj.get("provider_kind")),
         .base_url = try parseOptionalStoredStringAlloc(allocator, obj.get("base_url")),
         .balance_snapshot = try parseBalanceSnapshot(allocator, obj.get("balance_snapshot")),
@@ -76,14 +75,6 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
         rec.last_local_rollout = parseRolloutSignature(allocator, v);
     }
     return rec;
-}
-
-/// 兼容旧 schema：字段缺失或类型异常时按安全默认值排除智能池。
-fn parseSmartPoolEnabled(value: ?std.json.Value) bool {
-    return switch (value orelse return false) {
-        .bool => |enabled| enabled,
-        else => false,
-    };
 }
 
 fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {

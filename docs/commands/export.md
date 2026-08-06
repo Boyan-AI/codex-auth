@@ -5,7 +5,6 @@
 ```shell
 codex-auth export [<dir>]
 codex-auth export --cpa [<dir>]
-codex-auth export --cpa --smart-pool [<dir>]
 ```
 
 ## Standard Export
@@ -22,7 +21,7 @@ codex-auth export --cpa --smart-pool [<dir>]
 - A directory path writes direct child `.json` files to that directory.
 - Without a directory path, files are written to `CODEX_HOME/accounts/backup`.
 - The exported directory can be imported with `codex-auth import --cpa <dir>`.
-- `--smart-pool` is valid only with `--cpa` and exports enabled ChatGPT accounts only.
+- Export is an explicit file-conversion operation. It does not add accounts to the installed CPA runtime or change the global CPA route.
 
 ## Output
 

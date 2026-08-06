@@ -168,81 +168,27 @@ test "Scenario: Given gui stats full flag when parsing then full scan is request
     }
 }
 
-test "Scenario: Given gui smart pool actions when parsing then membership is preserved" {
+test "Scenario: Given gui CPA route actions when parsing then route inputs are preserved" {
     const gpa = std.testing.allocator;
-    const include_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "include" };
-    var include_result = try cli.commands.parseArgs(gpa, &include_args);
-    defer cli.commands.freeParseResult(gpa, &include_result);
+    const enable_args = [_][:0]const u8{
+        "codex-auth",
+        "gui",
+        "cpa-route",
+        "enable",
+        "http://127.0.0.1:8317/v1",
+        "/tmp/CPA/client.json",
+    };
+    var enable_result = try cli.commands.parseArgs(gpa, &enable_args);
+    defer cli.commands.freeParseResult(gpa, &enable_result);
 
-    switch (include_result) {
+    switch (enable_result) {
         .command => |cmd| switch (cmd) {
             .gui => |opts| switch (opts) {
-                .smart_pool => |pool_opts| {
-                    try std.testing.expectEqualStrings("acct-key", pool_opts.account_key);
-                    try std.testing.expect(pool_opts.enabled);
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-
-    const exclude_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "exclude" };
-    var exclude_result = try cli.commands.parseArgs(gpa, &exclude_args);
-    defer cli.commands.freeParseResult(gpa, &exclude_result);
-
-    switch (exclude_result) {
-        .command => |cmd| switch (cmd) {
-            .gui => |opts| switch (opts) {
-                .smart_pool => |pool_opts| try std.testing.expect(!pool_opts.enabled),
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given gui cpa sync when parsing then account action and directory are preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "gui", "cpa-sync", "acct-key", "exclude", "/tmp/cpa-auth" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .gui => |opts| switch (opts) {
-                .cpa_sync => |sync_opts| {
-                    switch (sync_opts) {
-                        .account => |account_opts| {
-                            try std.testing.expectEqualStrings("acct-key", account_opts.account_key);
-                            try std.testing.expectEqualStrings("/tmp/cpa-auth", account_opts.auth_dir);
-                            try std.testing.expect(!account_opts.enabled);
-                        },
-                        else => return error.TestExpectedEqual,
-                    }
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-// 验证 CPA 全目录对账机器命令保留专用认证目录参数。
-test "Scenario: Given gui cpa reconcile when parsing then auth directory is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "gui", "cpa-sync", "reconcile", "/tmp/cpa-auth" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .gui => |opts| switch (opts) {
-                .cpa_sync => |sync_opts| switch (sync_opts) {
-                    .reconcile => |auth_dir| try std.testing.expectEqualStrings("/tmp/cpa-auth", auth_dir),
+                .cpa_route => |route_opts| switch (route_opts) {
+                    .enable => |enable_opts| {
+                        try std.testing.expectEqualStrings("http://127.0.0.1:8317/v1", enable_opts.base_url);
+                        try std.testing.expectEqualStrings("/tmp/CPA/client.json", enable_opts.client_config_path);
+                    },
                     else => return error.TestExpectedEqual,
                 },
                 else => return error.TestExpectedEqual,
@@ -251,6 +197,36 @@ test "Scenario: Given gui cpa reconcile when parsing then auth directory is pres
         },
         else => return error.TestExpectedEqual,
     }
+
+    const disable_args = [_][:0]const u8{ "codex-auth", "gui", "cpa-route", "disable" };
+    var disable_result = try cli.commands.parseArgs(gpa, &disable_args);
+    defer cli.commands.freeParseResult(gpa, &disable_result);
+    switch (disable_result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .cpa_route => |route_opts| switch (route_opts) {
+                    .disable => {},
+                    else => return error.TestExpectedEqual,
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given removed account-level CPA commands when parsing then usage errors are returned" {
+    const gpa = std.testing.allocator;
+    const smart_pool_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "include" };
+    var smart_pool_result = try cli.commands.parseArgs(gpa, &smart_pool_args);
+    defer cli.commands.freeParseResult(gpa, &smart_pool_result);
+    try expectUsageError(smart_pool_result, .gui, "unknown gui subcommand `smart-pool`");
+
+    const cpa_sync_args = [_][:0]const u8{ "codex-auth", "gui", "cpa-sync", "reconcile", "/tmp/cpa-auth" };
+    var cpa_sync_result = try cli.commands.parseArgs(gpa, &cpa_sync_args);
+    defer cli.commands.freeParseResult(gpa, &cpa_sync_result);
+    try expectUsageError(cpa_sync_result, .gui, "unknown gui subcommand `cpa-sync`");
 }
 
 test "Scenario: Given gui add-key when parsing then provider metadata is preserved without a secret argument" {
@@ -493,32 +469,13 @@ test "Scenario: Given export cpa without directory when parsing then cpa mode is
     }
 }
 
-test "Scenario: Given export cpa smart pool when parsing then filter is preserved" {
+test "Scenario: Given removed export smart pool flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "export", "--smart-pool", "--cpa", "/tmp/cpa-auth" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .export_auth => |opts| {
-                try std.testing.expectEqual(cli.types.ExportFormat.cpa, opts.format);
-                try std.testing.expect(opts.smart_pool_only);
-                try std.testing.expectEqualStrings("/tmp/cpa-auth", opts.dest_path.?);
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given export smart pool without cpa when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "export", "--smart-pool" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .export_auth, "requires `--cpa`");
+    try expectUsageError(result, .export_auth, "unknown flag `--smart-pool`");
 }
 
 test "Scenario: Given import unknown short purge flag when parsing then usage error is returned" {
@@ -690,6 +647,20 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     try std.testing.expect(std.mem.indexOf(u8, help, "--active     Refresh only the active account before rendering.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
+}
+
+test "Scenario: Given gui help when rendering then global CPA route commands replace account-level commands" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, false, .gui);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui cpa-route enable <base-url> <client-config-path>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui cpa-route disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "smart-pool") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "cpa-sync") == null);
 }
 
 test "Scenario: Given command help with color when rendering then section titles use header style" {

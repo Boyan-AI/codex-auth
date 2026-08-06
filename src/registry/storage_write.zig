@@ -22,6 +22,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 
     const out = RegistryOut{
         .schema_version = current_schema_version,
+        .global_route = reg.global_route,
         .active_account_key = reg.active_account_key,
         .previous_active_account_key = reg.previous_active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
@@ -102,6 +103,7 @@ fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
 
 const RegistryOut = struct {
     schema_version: u32,
+    global_route: common.GlobalRoute,
     active_account_key: ?[]const u8,
     previous_active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,

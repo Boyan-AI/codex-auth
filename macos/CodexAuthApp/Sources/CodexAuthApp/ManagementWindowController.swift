@@ -127,24 +127,24 @@ final class ManagementWindowController: NSObject, NSWindowDelegate {
                 self.loginWindow?.orderOut(nil)
                 Task { await self.appState.login(alias: alias) }
             },
-            onAPIKey: { [weak self] alias, provider, baseURL, apiKey, includeInSmartPool in
+            onAPIKey: { [weak self] alias, provider, baseURL, apiKey in
                 guard let self else { return }
                 self.loginWindow?.orderOut(nil)
-                Task { await self.appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey, includeInSmartPool: includeInSmartPool) }
+                Task { await self.appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
             }
         )
         let hostingController = NSHostingController(rootView: rootView)
 
         if let loginWindow {
             loginWindow.contentViewController = hostingController
-            loginWindow.setContentSize(NSSize(width: 460, height: 360))
+            loginWindow.setContentSize(NSSize(width: 460, height: 300))
             loginWindow.center()
             loginWindow.makeKeyAndOrderFront(nil)
         } else {
             let loginWindow = NSWindow(contentViewController: hostingController)
             loginWindow.title = "添加账号"
             loginWindow.styleMask = [.titled, .closable]
-            loginWindow.setContentSize(NSSize(width: 460, height: 360))
+            loginWindow.setContentSize(NSSize(width: 460, height: 300))
             loginWindow.center()
             loginWindow.isReleasedWhenClosed = false
             loginWindow.hidesOnDeactivate = false
@@ -200,107 +200,79 @@ private struct ManagementRootView: View {
     }
 }
 
-/// 展示 CPA 连接、固定路由策略和当前智能池成员。
+/// 展示 CPA 独立服务状态、全局开关和原生管理页入口。
 private struct RoutingManagementView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("智能路由")
+                    Text("CPA 服务")
                         .font(.title2.weight(.semibold))
-                    Text(appState.cpaConnectionStatus.label)
+                    Text(appState.cpaServiceStatus.label)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("检查连接") {
-                    Task { await appState.refreshCPAConnection() }
-                }
-            }
-
-            HStack(spacing: 12) {
-                routingMetric(title: "服务地址", value: "127.0.0.1:8317")
-                routingMetric(title: "策略", value: "轮询")
-                routingMetric(title: "会话黏性", value: "1 小时")
-                routingMetric(title: "可用账号", value: "\(availableAccounts.count) / \(poolAccounts.count)")
-            }
-
-            if !pausedAccounts.isEmpty {
-                Label(
-                    "\(pausedAccounts.count) 个账号登录失效，已从 CPA 路由暂停；重新登录并刷新后会自动恢复。",
-                    systemImage: "exclamationmark.triangle.fill"
+                Toggle(
+                    "全局路由",
+                    isOn: Binding(
+                        get: { appState.isCPAEnabled },
+                        set: { enabled in Task { await appState.setCPAEnabled(enabled) } }
+                    )
                 )
-                .font(.callout)
-                .foregroundStyle(.orange)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                .toggleStyle(.switch)
+                .disabled(appState.isCPAOperationInProgress || appState.isAccountSwitchInProgress)
             }
 
-            List(poolAccounts) { account in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(account.primaryLabel)
-                        Text(account.secondaryLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if account.hasTerminalAuthenticationFailure {
-                            Text("登录失效，已暂停路由")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    Spacer()
-                    Text(account.usage.sevenDay.displayText)
-                        .monospacedDigit()
-                    Circle()
-                        .fill(account.isAvailable ? Color.accentColor : Color.red)
-                        .frame(width: 8, height: 8)
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
+                GridRow {
+                    Text("服务地址")
+                    Text("http://127.0.0.1:8317")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                GridRow {
+                    Text("当前路由")
+                    Text(appState.isCPAEnabled ? "CPA" : "直连")
+                        .foregroundStyle(.secondary)
+                }
+                GridRow {
+                    Text("备用连接")
+                    Text(appState.state?.activeAccount?.primaryLabel ?? "未选择")
+                        .foregroundStyle(.secondary)
                 }
             }
-            .overlay {
-                if poolAccounts.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "person.2.slash")
-                            .font(.title)
-                            .foregroundStyle(.secondary)
-                        Text("智能池为空")
-                            .foregroundStyle(.secondary)
-                    }
+
+            HStack {
+                Button {
+                    Task { await appState.refreshCPAServiceStatus() }
+                } label: {
+                    Label("刷新状态", systemImage: "arrow.clockwise")
                 }
+                Button {
+                    appState.copyCPAManagementKey()
+                } label: {
+                    Label("复制管理密钥", systemImage: "doc.on.doc")
+                }
+                .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
+                Spacer()
+                Button {
+                    Task { await appState.openCPAManagementPage() }
+                } label: {
+                    Label("打开管理页", systemImage: "safari")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(appState.cpaServiceStatus != .running || appState.isCPAOperationInProgress)
             }
+
+            Spacer()
         }
         .padding(24)
         .navigationTitle("路由")
-    }
-
-    /// 统一路由摘要卡片的标题和值样式。
-    private func routingMetric(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline)
-                .lineLimit(1)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var poolAccounts: [CodexAccount] {
-        (appState.state?.accounts ?? []).filter(\.participatesInSmartPool)
-    }
-
-    private var availableAccounts: [CodexAccount] {
-        poolAccounts.filter { $0.isEligibleForSmartRouting && $0.isAvailable }
-    }
-
-    /// 返回用户仍希望加入智能池、但已被终止性认证错误暂停的成员。
-    private var pausedAccounts: [CodexAccount] {
-        poolAccounts.filter(\.hasTerminalAuthenticationFailure)
+        .task { await appState.refreshCPAServiceStatus() }
     }
 }
 

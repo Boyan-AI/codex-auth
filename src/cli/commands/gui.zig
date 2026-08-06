@@ -22,8 +22,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, subcommand, "login")) return parseLogin(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "import")) return parseImport(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "alias")) return parseAlias(allocator, args[1..]);
-    if (std.mem.eql(u8, subcommand, "smart-pool")) return parseSmartPool(allocator, args[1..]);
-    if (std.mem.eql(u8, subcommand, "cpa-sync")) return parseCpaSync(allocator, args[1..]);
+    if (std.mem.eql(u8, subcommand, "cpa-route")) return parseCpaRoute(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "add-key")) return parseAddApiKey(allocator, args[1..]);
 
     if (common.isHelpFlag(subcommand)) {
@@ -33,6 +32,27 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui`.", .{subcommand});
     }
     return common.usageErrorResult(allocator, .gui, "unknown gui subcommand `{s}`.", .{subcommand});
+}
+
+/// 解析 CPA 全局路由启停参数；客户端密钥只由运行时凭据文件提供。
+fn parseCpaRoute(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len == 1 and std.mem.eql(u8, std.mem.sliceTo(args[0], 0), "disable")) {
+        return .{ .command = .{ .gui = .{ .cpa_route = .disable } } };
+    }
+    if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[0], 0), "enable")) {
+        const base_url = try allocator.dupe(u8, std.mem.sliceTo(args[1], 0));
+        errdefer allocator.free(base_url);
+        return .{ .command = .{ .gui = .{ .cpa_route = .{ .enable = .{
+            .base_url = base_url,
+            .client_config_path = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0)),
+        } } } } };
+    }
+    return common.usageErrorResult(
+        allocator,
+        .gui,
+        "`gui cpa-route` requires `enable <base-url> <client-config-path>` or `disable`.",
+        .{},
+    );
 }
 
 /// 解析 API Key 连接创建参数；密钥由调用方通过 CODEX_AUTH_API_KEY 环境变量传递。
@@ -51,51 +71,6 @@ fn parseAddApiKey(allocator: std.mem.Allocator, args: []const [:0]const u8) !typ
         .alias = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0)),
         .provider = provider,
         .base_url = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0)),
-    } } } };
-}
-
-/// 解析单账号 CPA 同步或全目录对账命令，目录参数必须显式提供。
-fn parseCpaSync(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
-    if (args.len == 2 and std.mem.eql(u8, std.mem.sliceTo(args[0], 0), "reconcile")) {
-        return .{ .command = .{ .gui = .{ .cpa_sync = .{
-            .reconcile = try allocator.dupe(u8, std.mem.sliceTo(args[1], 0)),
-        } } } };
-    }
-    if (args.len != 3) {
-        return common.usageErrorResult(allocator, .gui, "`gui cpa-sync` requires `reconcile <auth-dir>` or an account key, `include` or `exclude`, and an auth directory.", .{});
-    }
-    const action = std.mem.sliceTo(args[1], 0);
-    const enabled = if (std.mem.eql(u8, action, "include"))
-        true
-    else if (std.mem.eql(u8, action, "exclude"))
-        false
-    else
-        return common.usageErrorResult(allocator, .gui, "`gui cpa-sync` action must be `include` or `exclude`.", .{});
-    const account_key = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0));
-    errdefer allocator.free(account_key);
-    const auth_dir = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0));
-    return .{ .command = .{ .gui = .{ .cpa_sync = .{ .account = .{
-        .account_key = account_key,
-        .auth_dir = auth_dir,
-        .enabled = enabled,
-    } } } } };
-}
-
-/// 解析账号加入或排除智能路由池的机器接口。
-fn parseSmartPool(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
-    if (args.len != 2) {
-        return common.usageErrorResult(allocator, .gui, "`gui smart-pool` requires an account key and `include` or `exclude`.", .{});
-    }
-    const action = std.mem.sliceTo(args[1], 0);
-    const enabled = if (std.mem.eql(u8, action, "include"))
-        true
-    else if (std.mem.eql(u8, action, "exclude"))
-        false
-    else
-        return common.usageErrorResult(allocator, .gui, "`gui smart-pool` action must be `include` or `exclude`.", .{});
-    return .{ .command = .{ .gui = .{ .smart_pool = .{
-        .account_key = try allocator.dupe(u8, std.mem.sliceTo(args[0], 0)),
-        .enabled = enabled,
     } } } };
 }
 

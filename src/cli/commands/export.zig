@@ -9,7 +9,6 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
 
     var dest_path: ?[]u8 = null;
     var format: types.ExportFormat = .standard;
-    var smart_pool_only = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = std.mem.sliceTo(args[i], 0);
@@ -19,12 +18,6 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
                 return common.usageErrorResult(allocator, .export_auth, "duplicate `--cpa` for `export`.", .{});
             }
             format = .cpa;
-        } else if (std.mem.eql(u8, arg, "--smart-pool")) {
-            if (smart_pool_only) {
-                if (dest_path) |path| allocator.free(path);
-                return common.usageErrorResult(allocator, .export_auth, "duplicate `--smart-pool` for `export`.", .{});
-            }
-            smart_pool_only = true;
         } else if (common.isHelpFlag(arg)) {
             if (dest_path) |path| allocator.free(path);
             return common.usageErrorResult(allocator, .export_auth, "`--help` must be used by itself for `export`.", .{});
@@ -40,14 +33,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         }
     }
 
-    if (smart_pool_only and format != .cpa) {
-        if (dest_path) |path| allocator.free(path);
-        return common.usageErrorResult(allocator, .export_auth, "`--smart-pool` requires `--cpa` for `export`.", .{});
-    }
-
     return .{ .command = .{ .export_auth = .{
         .dest_path = dest_path,
         .format = format,
-        .smart_pool_only = smart_pool_only,
     } } };
 }

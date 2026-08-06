@@ -6,7 +6,6 @@ private enum AccountStatusFilter: String, CaseIterable, Identifiable {
     case available = "可用"
     case cooling = "冷却"
     case error = "异常"
-    case excluded = "已排除"
     case deleted = "已删除"
 
     var id: String { rawValue }
@@ -142,14 +141,12 @@ struct ManageAccountsView: View {
         case .all:
             return true
         case .available:
-            return account.participatesInSmartPool && account.isAvailable
+            return account.isAvailable
         case .cooling:
             let status = account.usage.sevenDay.status.lowercased()
             return status.contains("429") || status.contains("quota")
         case .error:
-            return account.participatesInSmartPool && !account.isAvailable
-        case .excluded:
-            return !account.participatesInSmartPool
+            return !account.isAvailable
         case .deleted:
             return false
         }
@@ -330,9 +327,9 @@ private struct AddConnectionSheet: View {
                 dismiss()
                 Task { await appState.login(alias: alias) }
             },
-            onAPIKey: { alias, provider, baseURL, apiKey, includeInSmartPool in
+            onAPIKey: { alias, provider, baseURL, apiKey in
                 dismiss()
-                Task { await appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey, includeInSmartPool: includeInSmartPool) }
+                Task { await appState.addAPIKey(alias: alias, provider: provider, baseURL: baseURL, apiKey: apiKey) }
             }
         )
     }
@@ -342,13 +339,12 @@ private struct AddConnectionSheet: View {
 struct AddConnectionForm: View {
     let onCancel: () -> Void
     let onAccount: (String?) -> Void
-    let onAPIKey: (String, APIKeyProvider, String, String, Bool) -> Void
+    let onAPIKey: (String, APIKeyProvider, String, String) -> Void
     @State private var connectionType = 0
     @State private var alias = ""
     @State private var provider: APIKeyProvider = .openai
     @State private var baseURL = APIKeyProvider.openai.defaultBaseURL
     @State private var apiKey = ""
-    @State private var includeInSmartPool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -375,10 +371,6 @@ struct AddConnectionForm: View {
                     .disabled(provider == .openai)
                 SecureField("API Key", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
-                Toggle("加入智能路由（默认关闭）", isOn: $includeInSmartPool)
-                Text("部分中转服务不兼容 CPA 代理转发；加入后请求失败不一定会自动切换到其他账号。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Text("余额仅在服务商支持且查询成功时显示。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -393,7 +385,7 @@ struct AddConnectionForm: View {
             }
         }
         .padding(24)
-        .frame(width: 460, height: connectionType == 0 ? 220 : 360)
+        .frame(width: 460, height: connectionType == 0 ? 220 : 300)
     }
 
     /// 校验 Key 表单的最小必填字段，后端继续负责安全 URL 校验。
@@ -412,14 +404,13 @@ struct AddConnectionForm: View {
                 trimmedAlias,
                 provider,
                 baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                includeInSmartPool
+                apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
     }
 }
 
-/// 展示单个账号额度、智能池状态、别名和低频操作。
+/// 展示单个直连账号的额度、选择状态、别名和低频操作。
 private struct AccountDetailView: View {
     @EnvironmentObject private var appState: AppState
     let account: CodexAccount
@@ -494,27 +485,19 @@ private struct AccountDetailView: View {
         }
     }
 
-    /// 分离官方直连选择和 CPA 智能池成员开关。
+    /// 选择关闭 CPA 后使用的直连连接。
     private var routingControls: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text(account.isAPIKey ? "直连 Key" : "直连账号")
-                Spacer()
-                Button(account.isActive ? "当前账号" : "设为当前") {
-                    Task { await appState.switchAccount(accountKey: account.accountKey) }
-                }
-                .disabled(account.isActive || appState.isAccountSwitchInProgress)
+        HStack {
+            Text(appState.isCPAEnabled ? "关闭 CPA 后使用" : (account.isAPIKey ? "直连 Key" : "直连账号"))
+            Spacer()
+            Button(account.isActive ? "当前账号" : "设为当前") {
+                Task { await appState.switchAccount(accountKey: account.accountKey) }
             }
-            Toggle(
-                "加入智能路由",
-                isOn: Binding(
-                    get: { account.participatesInSmartPool },
-                    set: { enabled in
-                        Task { await appState.setSmartPoolEnabled(accountKey: account.accountKey, enabled: enabled) }
-                    }
-                )
+            .disabled(
+                account.isActive
+                    || appState.isAccountSwitchInProgress
+                    || appState.isCPAOperationInProgress
             )
-            .disabled(appState.smartPoolUpdatingAccountKey != nil)
         }
     }
 

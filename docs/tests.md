@@ -89,10 +89,17 @@ HOME=/tmp/<task-name> swift test \
   --scratch-path /tmp/<task-name>/swift
 ```
 
-The CPA smart-routing suite covers localhost-only configuration, missing keys,
-invocation-scoped provider overrides, terminal secret isolation, smart-pool commands,
-installed client configuration, per-account CPA synchronization, management queue
-decoding, 429-triggered refresh, schema-compatible decoding, and refresh coalescing.
+The CPA global-routing suites cover schema 6 migration, route persistence, switching the fallback direct connection while CPA remains active, patch-preserving Codex configuration updates, command-backed client Key isolation, environment and macOS proxy rejection (including PAC and CGI environments), direct-only desktop URL sessions, credential-helper installation, service start/stop ordering, startup reconciliation and account-switch mutual exclusion, failure rollback, localhost-only runtime validation, pinned versions and panel assets, explicit Management Key copy, and system-browser management-page opening.
+
+Validate the isolated CPA installer separately:
+
+```sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/install-cpa-runtime.sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/cpa-credential-helper.sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/test-install-cpa-runtime.sh
+HOME=/tmp/<task-name> /path/to/repo/macos/CodexAuthApp/scripts/test-install-cpa-runtime.sh
+```
+
 `tests/token_usage_test.zig`
 owns the full-to-incremental cache regression so production files remain free of
 inline tests.

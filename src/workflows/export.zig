@@ -11,10 +11,7 @@ pub fn handleExport(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         .standard => .standard,
         .cpa => .cpa,
     };
-    var summary = if (opts.smart_pool_only)
-        try registry.exportSmartPoolAccounts(allocator, codex_home, &reg, opts.dest_path, format)
-    else
-        try registry.exportAccounts(allocator, codex_home, &reg, opts.dest_path, format);
+    var summary = try registry.exportAccounts(allocator, codex_home, &reg, opts.dest_path, format);
     defer summary.deinit(allocator);
 
     var stdout: io_util.Stdout = undefined;

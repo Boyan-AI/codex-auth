@@ -35,8 +35,23 @@ const service_tier_setting_key = "service_tier";
 const approvals_reviewer_setting_key = "approvals_reviewer";
 const disable_response_storage_setting_key = "disable_response_storage";
 const managed_custom_provider_section = "[model_providers.custom]";
+const managed_cpa_provider_section = "[model_providers.codex_auth_cpa]";
+const managed_cpa_auth_section = "[model_providers.codex_auth_cpa.auth]";
+const cpa_credential_helper_name = "codex-auth-cpa-credential";
 const managed_model = "gpt-5.6-sol";
 const official_openai_base_url = "https://api.openai.com/v1";
+
+/// 描述一次 Codex 全局路由补丁所需的非敏感输入。
+const CodexRoutePreset = union(enum) {
+    direct: ?[]const u8,
+    cpa: CpaRoutePreset,
+};
+
+/// 保存 CPA provider 的回环地址与客户端凭据文件位置。
+const CpaRoutePreset = struct {
+    base_url: []const u8,
+    client_config_path: []const u8,
+};
 
 pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, api_key: []const u8) ![]u8 {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
@@ -546,12 +561,24 @@ pub fn activateAccountByKey(
 
     try backupAuthIfChanged(allocator, codex_home, dest, src);
     try replaceFilePreservingPermissions(src, dest);
-    try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[account_index]);
+    if (reg.global_route == .direct) {
+        try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[account_index]);
+    }
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
 /// 按当前活动连接同步 Codex 全局预设；API Key 写入自定义 provider，ChatGPT 账号恢复账号预设。
 pub fn syncActiveCodexConfig(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+) !void {
+    if (reg.global_route == .cpa) return;
+    try syncDirectCodexConfig(allocator, codex_home, reg);
+}
+
+/// 强制按当前备用直连连接恢复 Codex 预设，不受注册表当前路由状态影响。
+fn syncDirectCodexConfig(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *const Registry,
@@ -568,17 +595,56 @@ pub fn syncActiveCodexConfig(
     try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[resolved_index]);
 }
 
+/// 写入 CPA 全局 provider，成功后才切换注册表路由状态。
+pub fn enableCpaCodexRoute(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    base_url: []const u8,
+    client_config_path: []const u8,
+) !void {
+    try validateCpaRouteInputs(base_url, client_config_path);
+    try syncCodexRoutePreset(allocator, codex_home, .{ .cpa = .{
+        .base_url = base_url,
+        .client_config_path = client_config_path,
+    } });
+    reg.global_route = .cpa;
+}
+
+/// 恢复当前备用直连连接，成功后才把注册表路由标记为直连。
+pub fn disableCpaCodexRoute(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+) !void {
+    if (reg.active_account_key == null) {
+        try syncCodexRoutePreset(allocator, codex_home, .{ .direct = null });
+    } else {
+        try syncDirectCodexConfig(allocator, codex_home, reg);
+    }
+    reg.global_route = .direct;
+}
+
 /// 将指定连接映射到 Codex 全局配置预设，避免账号与 API Key 继承彼此的专属设置。
 fn syncCodexConfigForAccount(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     account: *const AccountRecord,
 ) !void {
+    const base_url = try codexRoutingBaseURLForAccount(account);
+    try syncCodexRoutePreset(allocator, codex_home, .{ .direct = base_url });
+}
+
+/// 补丁式更新 Codex 配置并保留原文件权限与非托管内容。
+fn syncCodexRoutePreset(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    preset: CodexRoutePreset,
+) !void {
     const config_path = try std.fs.path.join(allocator, &.{ codex_home, codex_config_file_name });
     defer allocator.free(config_path);
 
     const existing_permissions = try common.existingFilePermissions(config_path);
-    const base_url = try codexRoutingBaseURLForAccount(account);
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), codex_home);
 
     const data = blk: {
@@ -591,7 +657,7 @@ fn syncCodexConfigForAccount(
     };
     defer allocator.free(data);
 
-    const updated = try updateCodexPresetSettingsAlloc(allocator, data, base_url);
+    const updated = try updateCodexPresetSettingsAlloc(allocator, data, preset);
     defer allocator.free(updated);
     if (std.mem.eql(u8, data, updated)) return;
 
@@ -606,6 +672,24 @@ fn syncCodexConfigForAccount(
     try writer.interface.flush();
     try atomic_file.replace(app_runtime.io());
     if (existing_permissions == null) try hardenSensitiveFile(config_path);
+}
+
+/// 校验 CPA 路由只能指向本机回环服务，且凭据文件使用绝对路径。
+fn validateCpaRouteInputs(base_url: []const u8, client_config_path: []const u8) !void {
+    if (!std.fs.path.isAbsolute(client_config_path)) return error.InvalidCpaClientConfigPath;
+    const uri = std.Uri.parse(base_url) catch return error.InvalidCpaBaseURL;
+    if (uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) {
+        return error.InvalidCpaBaseURL;
+    }
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "http") and !std.ascii.eqlIgnoreCase(uri.scheme, "https")) {
+        return error.InvalidCpaBaseURL;
+    }
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = std.Uri.getHost(uri, &host_buffer) catch return error.InvalidCpaBaseURL;
+    const is_loopback = std.ascii.eqlIgnoreCase(host.bytes, "localhost") or
+        std.mem.eql(u8, host.bytes, "127.0.0.1") or
+        std.mem.eql(u8, host.bytes, "::1");
+    if (!is_loopback) return error.NonLocalCpaBaseURL;
 }
 
 /// 只让 API Key 连接改写 Codex provider；账号订阅模式返回 null 以清理托管路由键。
@@ -623,7 +707,7 @@ fn codexRoutingBaseURLForAccount(account: *const AccountRecord) !?[]const u8 {
 fn updateCodexPresetSettingsAlloc(
     allocator: std.mem.Allocator,
     data: []const u8,
-    base_url: ?[]const u8,
+    preset: CodexRoutePreset,
 ) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -646,7 +730,7 @@ fn updateCodexPresetSettingsAlloc(
             }
             skipping_custom_provider = false;
         }
-        if (isManagedCustomProviderSection(line)) {
+        if (shouldRemoveManagedProviderSection(line, preset)) {
             pending_root_blank_start = null;
             skipping_custom_provider = true;
             offset = line_end;
@@ -660,7 +744,7 @@ fn updateCodexPresetSettingsAlloc(
         }
         if (!root_settings_closed and isTomlSection(line)) {
             pending_root_blank_start = null;
-            try appendCodexPresetSettings(allocator, &out, base_url);
+            try appendCodexPresetSettings(allocator, &out, preset);
             root_settings_closed = true;
         }
         if (!root_settings_closed and isManagedRootSetting(line)) {
@@ -679,7 +763,7 @@ fn updateCodexPresetSettingsAlloc(
     }
 
     if (!root_settings_closed) {
-        try appendCodexPresetSettings(allocator, &out, base_url);
+        try appendCodexPresetSettings(allocator, &out, preset);
     }
     return try out.toOwnedSlice(allocator);
 }
@@ -709,26 +793,83 @@ fn isManagedCustomProviderSection(line: []const u8) bool {
     return suffix.len == 0 or suffix[0] == '#' or suffix[0] == ' ' or suffix[0] == '\t';
 }
 
+/// 根据目标路由清理 Codex Auth 自己拥有的 provider 表。
+fn shouldRemoveManagedProviderSection(line: []const u8, preset: CodexRoutePreset) bool {
+    if (isManagedCpaProviderSection(line)) return true;
+    return switch (preset) {
+        .direct => isManagedCustomProviderSection(line),
+        .cpa => false,
+    };
+}
+
+/// 识别 CPA provider 主表与命令认证子表。
+fn isManagedCpaProviderSection(line: []const u8) bool {
+    return isExactTomlSection(line, managed_cpa_provider_section) or
+        isExactTomlSection(line, managed_cpa_auth_section);
+}
+
+/// 匹配允许尾随空白或注释的托管 TOML 表头。
+fn isExactTomlSection(line: []const u8, section: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, section)) return false;
+    const suffix = line[section.len..];
+    return suffix.len == 0 or suffix[0] == '#' or suffix[0] == ' ' or suffix[0] == '\t';
+}
+
 /// 追加账号或 API Key 对应的 Codex Auth 托管配置，保留 reasoning effort 的默认行为。
 fn appendCodexPresetSettings(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    base_url: ?[]const u8,
+    preset: CodexRoutePreset,
 ) !void {
     if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') try out.append(allocator, '\n');
-    if (base_url) |url| {
-        try out.appendSlice(allocator, model_provider_setting_key ++ " = \"custom\"\n");
-        try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
-        try out.appendSlice(allocator, disable_response_storage_setting_key ++ " = true\n\n");
-        try out.appendSlice(allocator, managed_custom_provider_section ++ "\n");
-        try out.appendSlice(allocator, "name = \"Sub2API\"\nbase_url = \"");
-        try appendTomlBasicStringContent(allocator, out, url);
-        try out.appendSlice(allocator, "\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n");
-        return;
+    switch (preset) {
+        .direct => |base_url| {
+            if (base_url) |url| {
+                try out.appendSlice(allocator, model_provider_setting_key ++ " = \"custom\"\n");
+                try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
+                try out.appendSlice(allocator, disable_response_storage_setting_key ++ " = true\n\n");
+                try out.appendSlice(allocator, managed_custom_provider_section ++ "\n");
+                try out.appendSlice(allocator, "name = \"Sub2API\"\nbase_url = \"");
+                try appendTomlBasicStringContent(allocator, out, url);
+                try out.appendSlice(allocator, "\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n\n");
+                return;
+            }
+            try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
+            try out.appendSlice(allocator, service_tier_setting_key ++ " = \"default\"\n");
+            try out.appendSlice(allocator, approvals_reviewer_setting_key ++ " = \"auto_review\"\n\n");
+        },
+        .cpa => |cpa| try appendCpaPresetSettings(allocator, out, cpa),
     }
+}
+
+/// 追加 CPA provider 与从 client.json 动态读取 bearer token 的认证命令。
+fn appendCpaPresetSettings(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    cpa: CpaRoutePreset,
+) !void {
+    const runtime_dir = std.fs.path.dirname(cpa.client_config_path) orelse return error.InvalidCpaClientConfigPath;
+    const credential_helper_path = try std.fs.path.join(
+        allocator,
+        &.{ runtime_dir, "bin", cpa_credential_helper_name },
+    );
+    defer allocator.free(credential_helper_path);
+
+    try out.appendSlice(allocator, model_provider_setting_key ++ " = \"codex_auth_cpa\"\n");
     try out.appendSlice(allocator, model_setting_key ++ " = \"" ++ managed_model ++ "\"\n");
-    try out.appendSlice(allocator, service_tier_setting_key ++ " = \"default\"\n");
-    try out.appendSlice(allocator, approvals_reviewer_setting_key ++ " = \"auto_review\"\n\n");
+    try out.appendSlice(allocator, disable_response_storage_setting_key ++ " = true\n\n");
+    try out.appendSlice(allocator, managed_cpa_provider_section ++ "\n");
+    try out.appendSlice(allocator, "name = \"Codex Auth CPA\"\nbase_url = \"");
+    try appendTomlBasicStringContent(allocator, out, cpa.base_url);
+    try out.appendSlice(allocator, "\"\nwire_api = \"responses\"\n\n");
+    try out.appendSlice(allocator, managed_cpa_auth_section ++ "\n");
+    try out.appendSlice(allocator, "command = \"");
+    try appendTomlBasicStringContent(allocator, out, credential_helper_path);
+    try out.appendSlice(allocator, "\"\nargs = [\"");
+    try appendTomlBasicStringContent(allocator, out, cpa.base_url);
+    try out.appendSlice(allocator, "\", \"");
+    try appendTomlBasicStringContent(allocator, out, cpa.client_config_path);
+    try out.appendSlice(allocator, "\"]\ntimeout_ms = 5000\nrefresh_interval_ms = 0\n\n");
 }
 
 /// 转义 TOML 基本字符串内容，避免 Base URL 破坏全局配置语法。
@@ -756,7 +897,7 @@ pub fn replaceActiveAuthWithAccountByKey(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
-    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const account_index = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
 
@@ -765,6 +906,9 @@ pub fn replaceActiveAuthWithAccountByKey(
 
     try ensureAccountsDir(allocator, codex_home);
     try replaceFilePreservingPermissions(src, dest);
+    if (reg.global_route == .direct) {
+        try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[account_index]);
+    }
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
@@ -774,7 +918,7 @@ pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
-    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const account_index = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
 
@@ -783,6 +927,9 @@ pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
 
     try ensureAccountsDir(allocator, codex_home);
     try replaceFilePreservingPermissions(src, dest);
+    if (reg.global_route == .direct) {
+        try syncCodexConfigForAccount(allocator, codex_home, &reg.accounts.items[account_index]);
+    }
     try setActiveAccountKeyPreservingPrevious(allocator, reg, account_key);
 }
 

@@ -23,7 +23,6 @@ pub const ExportFormat = enum { standard, cpa };
 pub const ExportOptions = struct {
     dest_path: ?[]u8,
     format: ExportFormat,
-    smart_pool_only: bool = false,
 };
 pub const SwitchTarget = union(enum) {
     picker,
@@ -92,18 +91,13 @@ pub const GuiAliasOptions = union(enum) {
     set: GuiAliasSetOptions,
     clear: GuiAliasClearOptions,
 };
-pub const GuiSmartPoolOptions = struct {
-    account_key: []u8,
-    enabled: bool,
+pub const GuiCpaRouteEnableOptions = struct {
+    base_url: []u8,
+    client_config_path: []u8,
 };
-pub const GuiCpaAccountSyncOptions = struct {
-    account_key: []u8,
-    auth_dir: []u8,
-    enabled: bool,
-};
-pub const GuiCpaSyncOptions = union(enum) {
-    account: GuiCpaAccountSyncOptions,
-    reconcile: []u8,
+pub const GuiCpaRouteOptions = union(enum) {
+    enable: GuiCpaRouteEnableOptions,
+    disable,
 };
 pub const ApiKeyProvider = enum { openai, relay };
 pub const GuiAddApiKeyOptions = struct {
@@ -120,8 +114,7 @@ pub const GuiOptions = union(enum) {
     import_auth: GuiImportOptions,
     remove_account: []u8,
     alias: GuiAliasOptions,
-    smart_pool: GuiSmartPoolOptions,
-    cpa_sync: GuiCpaSyncOptions,
+    cpa_route: GuiCpaRouteOptions,
     add_api_key: GuiAddApiKeyOptions,
 };
 pub const HelpTopic = enum {

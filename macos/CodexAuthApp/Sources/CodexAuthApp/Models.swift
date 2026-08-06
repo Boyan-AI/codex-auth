@@ -55,9 +55,16 @@ enum TokenUsageScanMode: Equatable {
     }
 }
 
+/// 表示所有新建 Codex 会话当前采用的全局路由。
+enum GlobalRoute: String, Codable, Equatable {
+    case direct
+    case cpa
+}
+
 struct CodexAuthState: Decodable, Equatable {
     let schemaVersion: Int
     let codexHome: String
+    let globalRoute: GlobalRoute
     let activeAccountKey: String?
     let generatedAt: Date
     let refresh: RefreshInfo
@@ -65,6 +72,51 @@ struct CodexAuthState: Decodable, Equatable {
     let warnings: [String]
     var tokenUsage: TokenUsageInfo? = nil
     let accounts: [CodexAccount]
+
+    /// 提供带安全直连默认值的显式初始化器，兼容测试和本地空状态。
+    init(
+        schemaVersion: Int,
+        codexHome: String,
+        globalRoute: GlobalRoute = .direct,
+        activeAccountKey: String?,
+        generatedAt: Date,
+        refresh: RefreshInfo,
+        resetCredits: ResetCreditsInfo? = nil,
+        warnings: [String],
+        tokenUsage: TokenUsageInfo? = nil,
+        accounts: [CodexAccount]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.codexHome = codexHome
+        self.globalRoute = globalRoute
+        self.activeAccountKey = activeAccountKey
+        self.generatedAt = generatedAt
+        self.refresh = refresh
+        self.resetCredits = resetCredits
+        self.warnings = warnings
+        self.tokenUsage = tokenUsage
+        self.accounts = accounts
+    }
+
+    /// 解码后端状态；旧输出缺少根级路由时按直连处理。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        codexHome = try container.decode(String.self, forKey: .codexHome)
+        globalRoute = try container.decodeIfPresent(GlobalRoute.self, forKey: .globalRoute) ?? .direct
+        activeAccountKey = try container.decodeIfPresent(String.self, forKey: .activeAccountKey)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        refresh = try container.decode(RefreshInfo.self, forKey: .refresh)
+        resetCredits = try container.decodeIfPresent(ResetCreditsInfo.self, forKey: .resetCredits)
+        warnings = try container.decode([String].self, forKey: .warnings)
+        tokenUsage = try container.decodeIfPresent(TokenUsageInfo.self, forKey: .tokenUsage)
+        accounts = try container.decode([CodexAccount].self, forKey: .accounts)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, codexHome, globalRoute, activeAccountKey, generatedAt
+        case refresh, resetCredits, warnings, tokenUsage, accounts
+    }
 
     var activeAccount: CodexAccount? {
         accounts.first { $0.accountKey == activeAccountKey || $0.isActive }
@@ -88,6 +140,7 @@ struct CodexAuthState: Decodable, Equatable {
         return CodexAuthState(
             schemaVersion: schemaVersion,
             codexHome: codexHome,
+            globalRoute: globalRoute,
             activeAccountKey: activeAccountKey,
             generatedAt: generatedAt,
             refresh: currentState.refresh,
@@ -102,6 +155,7 @@ struct CodexAuthState: Decodable, Equatable {
         CodexAuthState(
             schemaVersion: 1,
             codexHome: codexHome,
+            globalRoute: .direct,
             activeAccountKey: nil,
             generatedAt: Date(timeIntervalSince1970: 0),
             refresh: RefreshInfo(attempted: false, status: "skipped", message: nil),
@@ -256,7 +310,6 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
     let plan: String?
     let authMode: String?
     var resetCredits: ResetCreditsInfo? = nil
-    let smartPoolEnabled: Bool?
     var providerKind: String? = nil
     var baseURL: String? = nil
     var balance: BalanceSnapshot? = nil
@@ -267,7 +320,7 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case accountKey, displayName, alias, email, accountName, plan, authMode
-        case resetCredits, smartPoolEnabled, providerKind, balance, isActive
+        case resetCredits, providerKind, balance, isActive
         case baseURL = "baseUrl"
         case usage, lastUsageAt, lastRefreshAt
     }
@@ -283,11 +336,6 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
         return "\(balance.amount) \(balance.currency)"
     }
 
-    /// 兼容缺失智能池字段的状态，按安全默认值不加入智能路由。
-    var participatesInSmartPool: Bool {
-        smartPoolEnabled ?? false
-    }
-
     /// 仅识别要求重新登录的终止性认证错误，避免临时网络或额度错误误暂停路由。
     var hasTerminalAuthenticationFailure: Bool {
         guard !isAPIKey else { return false }
@@ -295,11 +343,6 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             .lowercased()
             .components(separatedBy: .whitespacesAndNewlines)
         return statusTokens.contains("token_invalidated") || statusTokens.contains("token_revoked")
-    }
-
-    /// 合并用户智能池意愿与运行时认证状态，作为 CPA 凭据副本的实际启用条件。
-    var isEligibleForSmartRouting: Bool {
-        participatesInSmartPool && !hasTerminalAuthenticationFailure
     }
 
     /// 仅把存在有效周额度的账号视为可选择状态，错误文本继续原样展示。
@@ -345,7 +388,6 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             plan: plan,
             authMode: authMode,
             resetCredits: currentAccount.resetCredits,
-            smartPoolEnabled: smartPoolEnabled,
             providerKind: providerKind,
             baseURL: baseURL,
             balance: currentAccount.balance,
@@ -422,7 +464,6 @@ struct CodexAccount: Decodable, Identifiable, Equatable {
             accountName: nil,
             plan: "pro",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             providerKind: nil,
             baseURL: nil,
             balance: nil,

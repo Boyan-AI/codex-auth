@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// 精简菜单栏主界面，仅保留智能启动、账号直连选择和高频入口。
+/// 精简菜单栏主界面，提供全局 CPA 服务控制和备用直连账号选择。
 struct MenuBarView: View {
     @EnvironmentObject private var appState: AppState
     var closeMenu: @MainActor () -> Void = {}
@@ -12,7 +12,7 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             header
-            smartLaunch
+            cpaControls
             accountControls
             accountList
             footer
@@ -27,9 +27,9 @@ struct MenuBarView: View {
         .frame(width: 420)
     }
 
-    /// 顶部只展示产品名和 CPA 短状态。
+    /// 展示产品名和当前服务状态。
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Codex Auth")
                     .font(.system(size: 20, weight: .semibold))
@@ -37,59 +37,58 @@ struct MenuBarView: View {
                     Circle()
                         .fill(cpaStatusColor)
                         .frame(width: 7, height: 7)
-                    Text(appState.cpaConnectionStatus.label)
+                    Text(appState.cpaServiceStatus.label)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-
             Spacer()
         }
     }
 
-    /// 主按钮始终通过 CPA 启动官方 Codex CLI，不提供静默直连回退。
-    private var smartLaunch: some View {
-        VStack(spacing: 6) {
-            Button {
-                openCodexSessionAfterChoosingDirectory(smart: true)
-            } label: {
-                Text("智能启动 Codex")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
+    /// 提供稳定尺寸的 CPA 全局开关和原生管理页入口。
+    private var cpaControls: some View {
+        HStack(spacing: 12) {
+            Toggle(
+                "CPA 全局路由",
+                isOn: Binding(
+                    get: { appState.isCPAEnabled },
+                    set: { enabled in Task { await appState.setCPAEnabled(enabled) } }
+                )
+            )
+            .toggleStyle(.switch)
+            .disabled(appState.isCPAOperationInProgress || appState.isAccountSwitchInProgress)
+
+            Spacer()
 
             Button {
-                openCodexSessionAfterChoosingDirectory(smart: false)
+                appState.copyCPAManagementKey()
             } label: {
-                Text("直连启动 Codex")
-                    .frame(maxWidth: .infinity)
+                Label("复制密钥", systemImage: "doc.on.doc")
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
-            .disabled(appState.state?.activeAccount == nil)
+            .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
+            .help("复制 CPA 管理密钥")
 
-            Text("\(availableSmartAccountCount) / \(smartPoolAccountCount) 个连接可用")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if !pausedSmartAccounts.isEmpty {
-                Label("\(pausedSmartAccounts.count) 个账号登录失效，已暂停路由", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+            Button {
+                closeMenu()
+                Task { await appState.openCPAManagementPage() }
+            } label: {
+                Label("管理 CPA", systemImage: "safari")
             }
+            .disabled(appState.cpaServiceStatus != .running || appState.isCPAOperationInProgress)
         }
+        .frame(minHeight: 32)
     }
 
     /// 将排序、今日消耗和全量刷新合并为一行高频控制。
     private var accountControls: some View {
         HStack(spacing: 10) {
+            Text(appState.isCPAEnabled ? "关闭 CPA 后使用" : "当前直连账号")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
             Picker("排序", selection: $selectedSortOrder) {
-                ForEach(AccountSortOrder.allCases) { order in
-                    Text(order.rawValue).tag(order)
-                }
+                ForEach(AccountSortOrder.allCases) { order in Text(order.rawValue).tag(order) }
             }
             .labelsHidden()
             .pickerStyle(.menu)
@@ -119,7 +118,7 @@ struct MenuBarView: View {
         }
     }
 
-    /// 提供默认和额度排序，并把可视高度控制在约四个账号。
+    /// 展示最多约四个账号高度的备用直连列表。
     @ViewBuilder
     private var accountList: some View {
         if appState.isLoading && appState.state == nil {
@@ -132,9 +131,7 @@ struct MenuBarView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(sortedAccounts) { account in
-                        AccountRow(account: account)
-                    }
+                    ForEach(sortedAccounts) { account in AccountRow(account: account) }
                 }
                 .background(ScrollIndicatorHider())
             }
@@ -143,16 +140,14 @@ struct MenuBarView: View {
         }
     }
 
-    /// 底部只保留五个稳定入口，账号编辑和设置都在独立管理窗口中完成。
+    /// 保留账号、管理、统计、设置和退出入口。
     private var footer: some View {
         HStack(spacing: 4) {
             footerButton("账号", systemImage: "plus", section: .addAccount)
             footerButton("管理", systemImage: "person.2", section: .accounts)
             footerButton("统计", systemImage: "chart.bar", section: .usage)
             footerButton("设置", systemImage: "gearshape", section: .settings)
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
+            Button { NSApplication.shared.terminate(nil) } label: {
                 footerLabel("退出", systemImage: "power")
             }
             .frame(maxWidth: .infinity)
@@ -172,77 +167,37 @@ struct MenuBarView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// 统一底部入口的紧凑图标与文字样式。
+    /// 统一底部入口的图标与文字样式。
     private func footerLabel(_ title: String, systemImage: String) -> some View {
         VStack(spacing: 3) {
-            Image(systemName: systemImage)
-                .font(.callout)
-            Text(title)
-                .font(.caption2)
+            Image(systemName: systemImage).font(.callout)
+            Text(title).font(.caption2)
         }
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
     }
 
-    /// 根据连接状态映射菜单中的单点颜色。
+    /// 根据服务状态映射状态点颜色。
     private var cpaStatusColor: Color {
-        switch appState.cpaConnectionStatus {
-        case .connected:
-            return .orange
-        case .unavailable:
-            return .red
-        case .unknown, .notConfigured:
-            return .secondary
+        switch appState.cpaServiceStatus {
+        case .running: return .green
+        case .starting: return .orange
+        case .unavailable, .incompatible: return .red
+        case .unknown, .notInstalled, .stopped: return .secondary
         }
     }
 
     private var sortedAccounts: [CodexAccount] {
         AccountOrdering.sorted(appState.state?.accounts ?? [], by: selectedSortOrder)
     }
-
-    private var smartPoolAccountCount: Int {
-        (appState.state?.accounts ?? []).filter(\.participatesInSmartPool).count
-    }
-
-    private var availableSmartAccountCount: Int {
-        (appState.state?.accounts ?? []).filter { $0.isEligibleForSmartRouting && $0.isAvailable }.count
-    }
-
-    /// 返回仍保留智能池意愿但因登录失效而被运行时暂停的账号。
-    private var pausedSmartAccounts: [CodexAccount] {
-        (appState.state?.accounts ?? []).filter {
-            $0.participatesInSmartPool && $0.hasTerminalAuthenticationFailure
-        }
-    }
-
-    /// 关闭菜单后选择目录，并把目录交给 CPA 智能启动流程。
-    @MainActor
-    private func openCodexSessionAfterChoosingDirectory(smart: Bool) {
-        CodexSessionMenuAction(
-            closeMenu: closeMenu,
-            chooseDirectory: CodexDirectoryPicker.chooseDirectory,
-            openSession: { directoryPath in
-                Task {
-                    if smart {
-                        await appState.openNewCodexSession(at: directoryPath)
-                    } else {
-                        await appState.openDirectCodexSession(at: directoryPath)
-                    }
-                }
-            }
-        ).run()
-    }
 }
 
-/// 从 SwiftUI 内容层定位底层 NSScrollView，覆盖系统“始终显示滚动条”偏好。
+/// 从 SwiftUI 内容层定位底层 NSScrollView，覆盖系统滚动条偏好。
 private struct ScrollIndicatorHider: NSViewRepresentable {
-    /// 创建不参与布局和交互的探针视图。
-    func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
-    }
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
 
-    /// 每次 SwiftUI 更新后重新关闭滚动条，避免系统偏好恢复 scroller。
+    /// 每次更新后关闭滚动条，保持菜单宽度稳定。
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             guard let scrollView = nsView.enclosingScrollView else { return }

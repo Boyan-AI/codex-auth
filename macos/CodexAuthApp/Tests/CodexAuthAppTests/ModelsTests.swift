@@ -2,6 +2,15 @@ import XCTest
 @testable import CodexAuthApp
 
 final class ModelsTests: XCTestCase {
+    /// 验证桌面端解码根级全局路由，不再从账号字段推断 CPA 状态。
+    func testDecodesGlobalCPARoute() throws {
+        let json = Data(#"{"schema_version":6,"codex_home":"/tmp/codex","global_route":"cpa","active_account_key":null,"generated_at":"2026-08-05T00:00:00Z","refresh":{"attempted":false,"status":"skipped","message":null},"warnings":[],"accounts":[]}"#.utf8)
+
+        let state = try JSONDecoder.codexAuth.decode(CodexAuthState.self, from: json)
+
+        XCTAssertEqual(state.globalRoute, .cpa)
+    }
+
     func testAPIKeyConnectionUsesBalanceAndDoesNotRequireQuotaWindows() throws {
         let json = Data("""
         {
@@ -90,15 +99,14 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(state.accounts[0].primaryLabel, "工作号")
         XCTAssertEqual(state.accounts[0].secondaryLabel, "me***@example.com")
         XCTAssertEqual(state.accounts[0].planLabel, "Pro")
-        XCTAssertFalse(state.accounts[0].participatesInSmartPool)
         XCTAssertEqual(state.accounts[0].fiveHourUsageText, "99%（6月30日 01:00刷新）")
         XCTAssertEqual(state.accounts[0].sevenDayUsageText, "100%（7月6日 20:00刷新）")
         XCTAssertEqual(state.resetCredits?.availableCount, 2)
         XCTAssertEqual(state.resetCredits?.menuBarText, "重置 2次 · 7月30日 08:00")
     }
 
-    /// 验证旧 GUI 输出缺少智能池字段时使用安全默认值排除智能路由。
-    func testMissingSmartPoolFieldDefaultsToExcluded() throws {
+    /// 验证账号模型不依赖已删除的智能池字段。
+    func testAccountDecodesWithoutLegacySmartPoolField() throws {
         let json = """
         {
           "account_key": "acct-legacy",
@@ -126,7 +134,6 @@ final class ModelsTests: XCTestCase {
 
         let account = try JSONDecoder.codexAuth.decode(CodexAccount.self, from: json)
 
-        XCTAssertFalse(account.participatesInSmartPool)
         XCTAssertTrue(account.isAvailable)
     }
 
@@ -172,7 +179,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: false,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 88, total: 100, used: 12, resetAt: nil),
@@ -246,21 +252,12 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(window.menuBarPercentText, "--")
     }
 
-    /// 验证只有明确要求重新登录的认证状态会暂停 CPA 路由，普通故障继续保留成员资格。
-    func testSmartRoutingEligibilityRejectsTerminalAuthenticationFailuresOnly() {
+    /// 验证终止性认证错误仍可用于直连账号状态展示。
+    func testDetectsTerminalAuthenticationFailuresOnly() {
         let invalidated = makeAccount(accountKey: "invalidated", usageStatus: "401 token_invalidated")
         let revoked = makeAccount(accountKey: "revoked", usageStatus: "401 token_revoked")
-        let networkError = makeAccount(accountKey: "network", usageStatus: "network_error")
-        let healthy = makeAccount(accountKey: "healthy", usageStatus: "ok", remainingPercent: 80)
-
         XCTAssertTrue(invalidated.hasTerminalAuthenticationFailure)
-        XCTAssertFalse(invalidated.isEligibleForSmartRouting)
         XCTAssertTrue(revoked.hasTerminalAuthenticationFailure)
-        XCTAssertFalse(revoked.isEligibleForSmartRouting)
-        XCTAssertFalse(networkError.hasTerminalAuthenticationFailure)
-        XCTAssertTrue(networkError.isEligibleForSmartRouting)
-        XCTAssertFalse(healthy.hasTerminalAuthenticationFailure)
-        XCTAssertTrue(healthy.isEligibleForSmartRouting)
     }
 
     func testLowUsageThresholdIsBelowTwentyPercent() {
@@ -282,7 +279,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 99, total: 100, used: 1, resetAt: nil),
@@ -346,7 +342,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 99, total: 100, used: 1, resetAt: nil),
@@ -373,7 +368,6 @@ final class ModelsTests: XCTestCase {
             accountName: "sk-test",
             plan: nil,
             authMode: "apikey",
-            smartPoolEnabled: false,
             providerKind: "relay",
             baseURL: "https://agentrouter.org/v1",
             isActive: true,
@@ -424,7 +418,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: nil,
@@ -481,7 +474,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: true,
             usage: UsageInfo(
                 fiveHour: UsageWindow(status: "ok", remainingPercent: 90, total: 100, used: 10, resetAt: nil),
@@ -521,7 +513,6 @@ final class ModelsTests: XCTestCase {
             accountName: nil,
             plan: "plus",
             authMode: "chatgpt",
-            smartPoolEnabled: true,
             isActive: false,
             usage: UsageInfo(
                 fiveHour: nil,

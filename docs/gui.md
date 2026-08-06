@@ -14,10 +14,10 @@ codex-auth gui refresh [--active] [--api|--skip-api]
 codex-auth gui stats [--full]
 codex-auth gui switch <account-key>
 codex-auth gui remove <account-key>
-codex-auth gui smart-pool <account-key> include|exclude
-codex-auth gui cpa-sync <account-key> include|exclude <auth-dir>
 codex-auth gui alias set <account-key> <alias>
 codex-auth gui alias clear <account-key>
+codex-auth gui cpa-route enable <base-url> <client-config-path>
+codex-auth gui cpa-route disable
 codex-auth gui import <path> [--alias <alias>]
 codex-auth gui login [--device-auth]
 ```
@@ -51,6 +51,7 @@ Top-level fields:
 
 - `schema_version`: registry schema version.
 - `codex_home`: resolved Codex home path.
+- `global_route`: `direct` or `cpa`; this is the route used by newly started Codex processes sharing this Codex home.
 - `active_account_key`: active account key or `null`.
 - `generated_at`: Unix timestamp in seconds.
 - `reset_credits`: reset opportunities for the active ChatGPT account during a GUI refresh, or `null` when unavailable.
@@ -67,7 +68,6 @@ Account fields:
 - `account_name`
 - `plan`
 - `auth_mode`
-- `smart_pool_enabled`: whether the account participates in CPA smart routing; it does not change the active direct account.
 - `is_active`
 - `reset_credits`: reset opportunities for this account during a GUI refresh, or `null` when the query failed or was skipped.
 - `usage.five_hour`: usage window object or `null` when the API does not explicitly report a 300-minute window.
@@ -90,15 +90,8 @@ Reset credit fields:
 
 ## Switching Semantics
 
-`gui switch <account-key>` has the same account activation semantics as the CLI switch path:
-it replaces the active auth file and saves the registry. It affects new Codex CLI sessions.
-Already-running `codex` processes are not modified.
+`gui switch <account-key>` has the same account activation semantics as the CLI switch path: it replaces the active auth file and saves the registry. In `direct` mode it also selects that connection's Codex provider settings. In `cpa` mode it updates only the fallback direct connection; the global CPA provider remains selected. Already-running `codex` processes are not modified.
 
-`gui smart-pool <account-key> include|exclude` only changes routing membership. It
-does not replace `auth.json`, switch the active direct account, or authenticate the
-account with CPA.
+`gui cpa-route enable` validates a loopback Base URL and absolute client configuration path, patches the shared Codex configuration to use `codex_auth_cpa`, then persists `global_route = "cpa"`. The client Key remains in the protected configuration file and is not accepted as a command argument. The installed command authentication helper validates macOS system routing and environment proxies independently: unsafe manual system proxies, PAC, or auto-discovery fail closed, while `NO_PROXY` can exclude only a non-loopback environment proxy.
 
-`gui cpa-sync <account-key> include|exclude <auth-dir>` applies that membership to an
-independent CPA directory. `include` writes the selected ChatGPT account using the CPA
-export format; `exclude` removes only the deterministic file for that account. The
-desktop app invokes this command after the membership state has been saved.
+`gui cpa-route disable` restores the currently selected fallback direct connection before persisting `global_route = "direct"`. The desktop app is responsible for starting and validating CPA before `enable`, and for stopping CPA only after `disable` succeeds.

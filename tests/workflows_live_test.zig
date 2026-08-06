@@ -327,6 +327,7 @@ test "switch live action patches the current display after switching" {
 
     var reg: registry.Registry = .{
         .schema_version = registry.current_schema_version,
+        .global_route = .cpa,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
         .api = registry.defaultApiConfig(),
@@ -391,6 +392,7 @@ test "switch live action patches the current display after switching" {
     }
 
     try std.testing.expectEqualStrings("Switched to Registry Beta(beta@example.com)", outcome.action_message.?);
+    try std.testing.expectEqual(registry.GlobalRoute.cpa, outcome.updated_display.reg.global_route);
     try std.testing.expectEqualStrings(beta_key, outcome.updated_display.reg.active_account_key.?);
     try std.testing.expectEqual(@as(usize, 2), outcome.updated_display.reg.accounts.items.len);
     try std.testing.expectEqualStrings("Registry Beta", outcome.updated_display.reg.accounts.items[beta_idx].account_name.?);
@@ -413,6 +415,7 @@ test "switch live action patches the current display after switching" {
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
+    try std.testing.expectEqual(registry.GlobalRoute.cpa, loaded.global_route);
     try std.testing.expectEqualStrings(beta_key, loaded.active_account_key.?);
 }
 

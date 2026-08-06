@@ -1,5 +1,7 @@
 # Account, API Key, and CPA Optimization
 
+> Historical design note. This account-level smart-pool and special-launch proposal was superseded on 2026-08-05 by [CPA Global Service Routing](./cpa-smart-routing.md). It does not describe current product behavior.
+
 This document defines the approved product and implementation direction for unifying ChatGPT accounts, API Key connections, and CPA smart routing.
 
 ## Product Positioning

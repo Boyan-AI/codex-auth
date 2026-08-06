@@ -5,8 +5,6 @@ const io_util = @import("../core/io_util.zig");
 const registry = @import("../registry/root.zig");
 const usage_api = @import("../api/usage.zig");
 const me_api = @import("../api/me.zig");
-const cpa_management = @import("../api/cpa_management.zig");
-const auth_api = @import("../auth/auth.zig");
 const live_flow = @import("live.zig");
 const login_workflow = @import("login.zig");
 const usage_refresh = @import("usage.zig");
@@ -24,10 +22,31 @@ pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli
         .import_auth => |import_opts| try handleImport(allocator, codex_home, import_opts),
         .remove_account => |account_key| try handleRemove(allocator, codex_home, account_key),
         .alias => |alias_opts| try handleAlias(allocator, codex_home, alias_opts),
-        .smart_pool => |pool_opts| try handleSmartPool(allocator, codex_home, pool_opts),
-        .cpa_sync => |sync_opts| try handleCpaSync(allocator, codex_home, sync_opts),
+        .cpa_route => |route_opts| try handleCpaRoute(allocator, codex_home, route_opts),
         .add_api_key => |add_opts| try handleAddApiKey(allocator, codex_home, add_opts),
     }
+}
+
+/// 切换 CPA 全局路由并在配置写入成功后持久化注册表状态。
+fn handleCpaRoute(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.types.GuiCpaRouteOptions,
+) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    switch (opts) {
+        .enable => |enable_opts| try registry.enableCpaCodexRoute(
+            allocator,
+            codex_home,
+            &reg,
+            enable_opts.base_url,
+            enable_opts.client_config_path,
+        ),
+        .disable => try registry.disableCpaCodexRoute(allocator, codex_home, &reg),
+    }
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
 }
 
 /// 从受保护环境变量创建 API Key 认证快照；不切换活动直连连接，也不自动加入 CPA。
@@ -57,7 +76,6 @@ fn handleAddApiKey(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         .relay => .relay,
     };
     record.base_url = try allocator.dupe(u8, normalized_base_url);
-    record.smart_pool_enabled = false;
 
     var auth_json: std.Io.Writer.Allocating = .init(allocator);
     defer auth_json.deinit();
@@ -106,76 +124,6 @@ fn apiKeyMeEndpointAlloc(allocator: std.mem.Allocator, base_url: []const u8) ![]
     const trimmed = std.mem.trimEnd(u8, base_url, "/");
     if (trimmed.len == 0) return error.InvalidBaseURL;
     return std.fmt.allocPrint(allocator, "{s}/me", .{trimmed});
-}
-
-/// 分发单账号 CPA 同步与专用认证目录全量对账。
-fn handleCpaSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaSyncOptions) !void {
-    switch (opts) {
-        .account => |account_opts| try handleCpaAccountSync(allocator, codex_home, account_opts),
-        .reconcile => |auth_dir| try handleCpaReconcile(allocator, codex_home, auth_dir),
-    }
-}
-
-/// 将单个账号复制到或移出独立 CPA 认证目录，不修改官方 Codex 活动凭据。
-fn handleCpaAccountSync(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.GuiCpaAccountSyncOptions) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    const idx = registry.findAccountIndexByAccountKey(&reg, opts.account_key) orelse return error.AccountNotFound;
-    const record = &reg.accounts.items[idx];
-    if (opts.enabled and !record.smart_pool_enabled) return error.AccountExcludedFromSmartPool;
-    if (record.auth_mode != null and record.auth_mode.? == .apikey) {
-        const management_url = try registry.getNonEmptyEnvVarOwned(allocator, "CODEX_AUTH_CPA_MANAGEMENT_URL");
-        defer if (management_url) |value| allocator.free(value);
-        const management_key = try registry.getNonEmptyEnvVarOwned(allocator, "CODEX_AUTH_CPA_MANAGEMENT_KEY");
-        defer if (management_key) |value| allocator.free(value);
-        const endpoint = management_url orelse return error.MissingCpaManagementURL;
-        const key = management_key orelse return error.MissingCpaManagementKey;
-        const auth_path = try registry.accountAuthPath(allocator, codex_home, record.account_key);
-        defer allocator.free(auth_path);
-        const info = try auth_api.parseAuthInfo(allocator, auth_path);
-        defer info.deinit(allocator);
-        const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
-        const base_url = record.base_url orelse return error.InvalidBaseURL;
-        try cpa_management.syncCodexApiKey(allocator, endpoint, key, api_key, base_url, opts.enabled);
-    } else {
-        try registry.syncCpaAccount(allocator, codex_home, &reg, opts.account_key, opts.auth_dir, opts.enabled);
-    }
-
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try out.writeAll("{\"account_key\":");
-    try writeJsonString(out, opts.account_key);
-    try out.print(",\"enabled\":{}}}\n", .{opts.enabled});
-    try out.flush();
-}
-
-/// 依据注册表快照收敛 CPA 认证目录，并返回不含认证内容的计数摘要。
-fn handleCpaReconcile(allocator: std.mem.Allocator, codex_home: []const u8, auth_dir: []const u8) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    const summary = try registry.reconcileCpaAccounts(allocator, codex_home, &reg, auth_dir);
-    try registry.saveRegistry(allocator, codex_home, &reg);
-
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try out.print("{{\"synced\":{d},\"removed\":{d}}}\n", .{ summary.synced, summary.removed });
-    try out.flush();
-}
-
-/// 更新账号的智能池成员状态，并返回最新 GUI 状态。
-fn handleSmartPool(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    opts: cli.types.GuiSmartPoolOptions,
-) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    const idx = registry.findAccountIndexByAccountKey(&reg, opts.account_key) orelse return error.AccountNotFound;
-    reg.accounts.items[idx].smart_pool_enabled = opts.enabled;
-    try registry.saveRegistry(allocator, codex_home, &reg);
-    try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
 }
 
 /// 根据 GUI 请求选择强制全量解析或基于文件签名的增量扫描。
@@ -330,22 +278,9 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, account_ke
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
-    var before = try registry.loadRegistry(allocator, codex_home);
-    defer before.deinit(allocator);
-    var known_keys = std.StringHashMap(void).init(allocator);
-    defer known_keys.deinit();
-    for (before.accounts.items) |account| try known_keys.put(account.account_key, {});
-
     try login_workflow.handleLogin(allocator, codex_home, opts);
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    if (reg.active_account_key) |logged_in_key| {
-        if (!known_keys.contains(logged_in_key)) {
-            const idx = registry.findAccountIndexByAccountKey(&reg, logged_in_key) orelse return error.AccountNotFound;
-            reg.accounts.items[idx].smart_pool_enabled = false;
-        }
-    }
-    try registry.saveRegistry(allocator, codex_home, &reg);
     try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
 }
 
@@ -410,6 +345,8 @@ fn writeStateJson(
     try out.print("\"schema_version\":{d},", .{reg.schema_version});
     try out.writeAll("\"codex_home\":");
     try writeJsonString(out, codex_home);
+    try out.writeAll(",\"global_route\":");
+    try writeJsonString(out, @tagName(reg.global_route));
     try out.writeAll(",\"active_account_key\":");
     try writeOptionalJsonString(out, reg.active_account_key);
     try out.print(",\"generated_at\":{d},", .{now});
@@ -471,7 +408,6 @@ fn writeAccountJson(
     } else {
         try out.writeAll("null");
     }
-    try out.print(",\"smart_pool_enabled\":{}", .{rec.smart_pool_enabled});
     try out.writeAll(",\"provider_kind\":");
     if (rec.provider_kind) |kind| try writeJsonString(out, @tagName(kind)) else try out.writeAll("null");
     try out.writeAll(",\"base_url\":");

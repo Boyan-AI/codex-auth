@@ -209,7 +209,6 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .export_auth => {
             try out.writeAll("  codex-auth export [<dir>]\n");
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
-            try out.writeAll("  codex-auth export --cpa --smart-pool [<dir>]\n");
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch -\n");
@@ -243,9 +242,8 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui remove <account-key>\n");
             try out.writeAll("  codex-auth gui alias set <account-key> <alias>\n");
             try out.writeAll("  codex-auth gui alias clear <account-key>\n");
-            try out.writeAll("  codex-auth gui smart-pool <account-key> include|exclude\n");
-            try out.writeAll("  codex-auth gui cpa-sync <account-key> include|exclude <auth-dir>\n");
-            try out.writeAll("  codex-auth gui cpa-sync reconcile <auth-dir>\n");
+            try out.writeAll("  codex-auth gui cpa-route enable <base-url> <client-config-path>\n");
+            try out.writeAll("  codex-auth gui cpa-route disable\n");
             try out.writeAll("  codex-auth gui import <path> [--alias <alias>]\n");
             try out.writeAll("  codex-auth gui login [--device-auth]\n");
         },
@@ -295,7 +293,6 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .export_auth => {
             try out.writeAll("  <dir>   Directory to write exported account files. Uses `CODEX_HOME/accounts/backup` when omitted.\n");
             try out.writeAll("  --cpa   Export CPA flat token JSON. Without this, exports Codex auth snapshots.\n");
-            try out.writeAll("  --smart-pool   Export only accounts included in smart routing. Requires `--cpa`.\n");
         },
         .switch_account => {
             try out.writeAll("  --live       Open the live switch UI.\n");
@@ -340,6 +337,9 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --full       Reparse every rollout file for `gui stats`.\n");
             try out.writeAll("  <account-key>\n");
             try out.writeAll("               Stable account key from `codex-auth gui state`.\n");
+            try out.writeAll("  <base-url>   Loopback CPA Responses API base URL.\n");
+            try out.writeAll("  <client-config-path>\n");
+            try out.writeAll("               Absolute path to the protected CPA client configuration.\n");
         },
         else => {},
     }
@@ -378,7 +378,6 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export\n");
             try out.writeAll("  codex-auth export /path/to/backup\n");
             try out.writeAll("  codex-auth export --cpa /path/to/cpa-backup\n");
-            try out.writeAll("  codex-auth export --cpa --smart-pool /path/to/cpa-auth\n");
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
@@ -423,7 +422,8 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui refresh --api\n");
             try out.writeAll("  codex-auth gui stats --full\n");
             try out.writeAll("  codex-auth gui switch user::account\n");
-            try out.writeAll("  codex-auth gui cpa-sync reconcile /path/to/cpa-auth\n");
+            try out.writeAll("  codex-auth gui cpa-route enable http://127.0.0.1:8317/v1 /path/to/client.json\n");
+            try out.writeAll("  codex-auth gui cpa-route disable\n");
         },
     }
 }

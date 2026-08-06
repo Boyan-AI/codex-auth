@@ -1,6 +1,5 @@
 pub const api = struct {
     pub const account = @import("api/account.zig");
-    pub const cpa_management = @import("api/cpa_management.zig");
     pub const http = @import("api/http.zig");
     pub const me = @import("api/me.zig");
     pub const usage = @import("api/usage.zig");

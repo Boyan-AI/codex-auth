@@ -9,7 +9,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 - File permissions: [docs/permissions.md](./permissions.md)
 - Schema migration: [docs/schema-migration.md](./schema-migration.md)
 - Test organization: [docs/tests.md](./tests.md)
-- CPA smart routing: [docs/cpa-smart-routing.md](./cpa-smart-routing.md)
+- CPA global service routing: [docs/cpa-smart-routing.md](./cpa-smart-routing.md)
 - Release and CI: [docs/release.md](./release.md)
 
 ## Runtime State
@@ -23,6 +23,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 Managed files:
 
 - `<codex_home>/auth.json`
+- `<codex_home>/config.toml`
 - `<codex_home>/accounts/registry.json`
 - `<codex_home>/accounts/token-usage-cache.json`
 - `<codex_home>/accounts/<account file key>.auth.json`
@@ -132,15 +133,9 @@ later scan rebuilds it from rollout files.
 - Incremental Token requests arriving during a full scan are collapsed into one follow-up pass.
 - Generation and state sequence counters prevent stale async results from replacing newer account or Token state.
 
-The CPA event adapter consumes the authenticated usage queue from the pinned managed
-runtime every five seconds. It only forwards event presence and HTTP 429 state to the
-existing coordinator; Token totals remain derived from local rollout files.
+CPA does not participate in quota or Token refresh coordination. The desktop app does not read CPA account data or poll CPA request events; Token totals remain derived from local rollout files.
 
-The managed CPA runtime lives under
-`~/Library/Application Support/Codex Auth/CPA`. Its `auth/` directory contains copied
-CPA-format account files and is never used as the direct Codex home. Smart-pool changes
-persist registry metadata first, then call `gui cpa-sync` for one account. A copy failure
-is reported without rolling back the saved membership value.
+The managed CPA runtime lives under `~/Library/Application Support/Codex Auth/CPA` and is controlled by the user-level `com.codex-auth.cpa` LaunchAgent. CPA owns all data under its account/provider configuration boundary. Codex Auth owns only the fixed local service contract, pinned management panel, service lifecycle, and the root-level registry `global_route` used to patch the shared Codex provider.
 
 
 ## Display Model
@@ -155,7 +150,4 @@ is reported without rolling back the saved membership value.
 
 Command-specific display behavior lives in the relevant file under [docs/commands/](./commands/).
 
-The macOS menu uses a flat status-sorted account list rather than the CLI's grouped
-table. It keeps one 420-point popover for frequent actions and one reusable management
-window for accounts, routing, statistics, and settings. Selecting a row changes only
-the next direct Codex CLI session; smart-pool membership is a separate account setting.
+The macOS menu uses a flat status-sorted account list rather than the CLI's grouped table. It keeps one 420-point popover for frequent actions and one reusable management window for accounts, routing, statistics, and settings. Selecting a row changes the active direct connection; while CPA is enabled, that selection is retained as the fallback used after CPA is disabled and the global CPA provider remains active.

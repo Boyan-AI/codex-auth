@@ -518,7 +518,7 @@ test "registry save/load round-trips account_name null" {
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
 }
 
-test "registry load migrates schema four to five" {
+test "registry load migrates schema four to current" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -547,11 +547,46 @@ test "registry load migrates schema four to five" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 6") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
 }
 
-test "registry schema five defaults missing smart pool field to excluded and rewrites it" {
+test "registry load migrates schema five to six with direct global route" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 5,
+        \\  "global_route": "cpa",
+        \\  "active_account_key": null,
+        \\  "previous_active_account_key": null,
+        \\  "active_account_activated_at_ms": null,
+        \\  "interval_seconds": 60,
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(registry.GlobalRoute.direct, loaded.global_route);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"global_route\": \"direct\"") != null);
+}
+
+test "registry schema five ignores and removes legacy smart pool fields" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -575,6 +610,7 @@ test "registry schema five defaults missing smart pool field to excluded and rew
         \\      "chatgpt_user_id": "user-one",
         \\      "email": "one@example.com",
         \\      "alias": "one",
+        \\      "smart_pool_enabled": true,
         \\      "created_at": 1,
         \\      "last_used_at": null,
         \\      "last_usage_at": null
@@ -587,34 +623,12 @@ test "registry schema five defaults missing smart pool field to excluded and rew
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(!loaded.accounts.items[0].smart_pool_enabled);
 
     var file = try tmp.dir.openFile("accounts/registry.json", .{});
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"smart_pool_enabled\": false") != null);
-}
-
-test "registry save and load preserves smart pool exclusion" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-
-    var reg = makeEmptyRegistry();
-    defer reg.deinit(gpa);
-    var rec = try makeAccountRecord(gpa, "excluded@example.com", "excluded", .plus, .chatgpt, 1);
-    rec.smart_pool_enabled = false;
-    try reg.accounts.append(gpa, rec);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expect(!loaded.accounts.items[0].smart_pool_enabled);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "smart_pool_enabled") == null);
 }
 
 test "registry save and load preserves API key provider metadata and balance snapshot" {
@@ -884,7 +898,7 @@ test "legacy schema registry with legacy rollout attribution rewrites to normali
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 6") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_activated_at_ms\": 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"last_attributed_rollout\"") == null);
 }
@@ -916,7 +930,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 6") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"interval_seconds\": 60") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"live\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
@@ -1005,7 +1019,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 6") != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
@@ -1215,7 +1229,7 @@ test "sync active auth leaves auth json permissions unchanged while hardening ma
     try expectModeUnix(snapshot_path, 0o600);
 }
 
-test "replaceActiveAuthWithAccountByKey preserves existing auth json permissions" {
+test "replaceActiveAuthWithAccountByKey preserves auth permissions and syncs direct preset" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1258,6 +1272,13 @@ test "replaceActiveAuthWithAccountByKey preserves existing auth json permissions
     defer gpa.free(auth_bytes);
     try std.testing.expectEqualStrings(account_auth, auth_bytes);
     try expectModeUnix(auth_path, 0o644);
+
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    const config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "model = \"gpt-5.6-sol\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "model_provider") == null);
 }
 
 test "activateAccountByKey preserves snapshot permissions when auth json is created" {
@@ -1499,6 +1520,132 @@ test "syncActiveCodexConfig creates idempotent ChatGPT account preset" {
         "approvals_reviewer = \"auto_review\"\n\n";
     try std.testing.expectEqualStrings(expected_config, config);
     try expectModeUnix(config_path, 0o600);
+}
+
+test "enableCpaCodexRoute writes command authentication without storing the client key" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    const client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    defer gpa.free(client_path);
+    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "CPA/bin/codex-auth-cpa-credential" });
+    defer gpa.free(credential_helper_path);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const original_config =
+        \\model = "gpt-5"
+        \\model_provider = "custom"
+        \\# keep this comment
+        \\[model_providers.custom]
+        \\name = "Existing direct route"
+        \\base_url = "https://relay.example/v1"
+        \\wire_api = "responses"
+        \\requires_openai_auth = true
+        \\[plugins.example]
+        \\enabled = true
+        \\
+    ;
+    try tmp.dir.writeFile(.{ .sub_path = "config.toml", .data = original_config });
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    try setModeUnix(config_path, 0o640);
+
+    try registry.enableCpaCodexRoute(gpa, codex_home, &reg, "http://127.0.0.1:8317/v1", client_path);
+    try registry.enableCpaCodexRoute(gpa, codex_home, &reg, "http://127.0.0.1:8317/v1", client_path);
+
+    try std.testing.expectEqual(registry.GlobalRoute.cpa, reg.global_route);
+    var config_file = try fs.cwd().openFile(config_path, .{});
+    defer config_file.close();
+    const config = try config_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "model_provider = \"codex_auth_cpa\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "[model_providers.codex_auth_cpa.auth]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, credential_helper_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "\"http://127.0.0.1:8317/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, client_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "command = \"/usr/bin/plutil\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "[plugins.example]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "requires_openai_auth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "client-secret-value") == null);
+    try expectModeUnix(config_path, 0o640);
+}
+
+test "enableCpaCodexRoute rejects non-local provider addresses" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    const client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    defer gpa.free(client_path);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try std.testing.expectError(
+        error.NonLocalCpaBaseURL,
+        registry.enableCpaCodexRoute(gpa, codex_home, &reg, "https://proxy.example/v1", client_path),
+    );
+    try std.testing.expectEqual(registry.GlobalRoute.direct, reg.global_route);
+}
+
+test "CPA route keeps global provider while switching and disable restores latest direct account" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    const client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    defer gpa.free(client_path);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const chatgpt = try makeAccountRecord(gpa, "direct@example.com", "direct", .plus, .chatgpt, 1);
+    try reg.accounts.append(gpa, chatgpt);
+    var relay = try makeAccountRecord(gpa, "relay@example.com", "relay", null, .apikey, 2);
+    relay.provider_kind = .relay;
+    relay.base_url = try gpa.dupe(u8, "https://latest-relay.example/v1");
+    try reg.accounts.append(gpa, relay);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const chatgpt_auth_path = try registry.accountAuthPath(gpa, codex_home, chatgpt.account_key);
+    defer gpa.free(chatgpt_auth_path);
+    const chatgpt_auth_rel = try fs.path.join(gpa, &.{ "accounts", fs.path.basename(chatgpt_auth_path) });
+    defer gpa.free(chatgpt_auth_rel);
+    const chatgpt_auth = try authJsonWithEmailPlan(gpa, "direct@example.com", "plus");
+    defer gpa.free(chatgpt_auth);
+    try tmp.dir.writeFile(.{ .sub_path = chatgpt_auth_rel, .data = chatgpt_auth });
+
+    const relay_auth_path = try registry.accountAuthPath(gpa, codex_home, relay.account_key);
+    defer gpa.free(relay_auth_path);
+    const relay_auth_rel = try fs.path.join(gpa, &.{ "accounts", fs.path.basename(relay_auth_path) });
+    defer gpa.free(relay_auth_rel);
+    try tmp.dir.writeFile(.{ .sub_path = relay_auth_rel, .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
+
+    try registry.activateAccountByKey(gpa, codex_home, &reg, chatgpt.account_key);
+    try registry.enableCpaCodexRoute(gpa, codex_home, &reg, "http://localhost:8317/v1", client_path);
+    try registry.activateAccountByKey(gpa, codex_home, &reg, relay.account_key);
+
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    const cpa_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(cpa_config);
+    try std.testing.expect(std.mem.indexOf(u8, cpa_config, "model_provider = \"codex_auth_cpa\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cpa_config, "latest-relay") == null);
+
+    try registry.disableCpaCodexRoute(gpa, codex_home, &reg);
+    try registry.disableCpaCodexRoute(gpa, codex_home, &reg);
+    try std.testing.expectEqual(registry.GlobalRoute.direct, reg.global_route);
+    const direct_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(direct_config);
+    try std.testing.expect(std.mem.indexOf(u8, direct_config, "model_provider = \"custom\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, direct_config, "base_url = \"https://latest-relay.example/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, direct_config, "codex_auth_cpa") == null);
 }
 
 test "sync active auth matches by email and updates account auth" {
@@ -2254,114 +2401,4 @@ test "export accounts writes cpa token files to default backup directory" {
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"type\": \"codex\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
-}
-
-test "smart pool export remains explicit and single oauth sync never copies auth files" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("imports");
-
-    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "smart-pool@example.com", "plus");
-    defer gpa.free(cpa_json);
-    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
-    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
-    defer gpa.free(import_path);
-
-    var reg = makeEmptyRegistry();
-    defer reg.deinit(gpa);
-    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
-    defer import_report.deinit(gpa);
-    const account_key = reg.accounts.items[0].account_key;
-    reg.accounts.items[0].smart_pool_enabled = true;
-
-    const export_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "cpa-auth" });
-    defer gpa.free(export_dir);
-    var summary = try registry.exportSmartPoolAccounts(gpa, codex_home, &reg, export_dir, .cpa);
-    defer summary.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), summary.exported);
-
-    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
-    defer gpa.free(snapshot_name);
-    const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{ snapshot_name[0 .. snapshot_name.len - ".auth.json".len], ".json" });
-    defer gpa.free(cpa_name);
-    const exported_path = try fs.path.join(gpa, &[_][]const u8{ export_dir, cpa_name });
-    defer gpa.free(exported_path);
-    _ = try fs.cwd().statFile(exported_path);
-
-    reg.accounts.items[0].smart_pool_enabled = false;
-    var excluded_summary = try registry.exportSmartPoolAccounts(gpa, codex_home, &reg, export_dir, .cpa);
-    defer excluded_summary.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 0), excluded_summary.exported);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
-
-    reg.accounts.items[0].smart_pool_enabled = true;
-    try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, true);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
-    reg.accounts.items[0].smart_pool_enabled = false;
-    try registry.syncCpaAccount(gpa, codex_home, &reg, account_key, export_dir, false);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(exported_path));
-}
-
-// 验证 CPA 对账只清理旧版复制文件，保留 CPA 自主 OAuth 文件和非 JSON 文件。
-test "reconcile cpa auth directory removes only legacy managed copies" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("imports");
-    try tmp.dir.makePath("cpa-auth");
-
-    const emails = [_][]const u8{
-        "included@example.com",
-        "excluded@example.com",
-        "api-key@example.com",
-    };
-    var reg = makeEmptyRegistry();
-    defer reg.deinit(gpa);
-    for (emails) |email| {
-        const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, email, "plus");
-        defer gpa.free(cpa_json);
-        const import_name = try std.fmt.allocPrint(gpa, "imports/{s}.json", .{email});
-        defer gpa.free(import_name);
-        try tmp.dir.writeFile(.{ .sub_path = import_name, .data = cpa_json });
-        const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, import_name });
-        defer gpa.free(import_path);
-        var report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
-        defer report.deinit(gpa);
-    }
-    reg.accounts.items[1].smart_pool_enabled = false;
-    reg.accounts.items[2].smart_pool_enabled = true;
-    reg.accounts.items[2].auth_mode = .apikey;
-
-    const auth_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "cpa-auth" });
-    defer gpa.free(auth_dir);
-    for (reg.accounts.items) |record| {
-        const snapshot_name = try registry.accountSnapshotFileName(gpa, record.account_key);
-        defer gpa.free(snapshot_name);
-        const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{
-            snapshot_name[0 .. snapshot_name.len - ".auth.json".len],
-            ".json",
-        });
-        defer gpa.free(cpa_name);
-        const stale_path = try fs.path.join(gpa, &[_][]const u8{ "cpa-auth", cpa_name });
-        defer gpa.free(stale_path);
-        try tmp.dir.writeFile(.{ .sub_path = stale_path, .data = "stale" });
-    }
-    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/codex-independent@example.com.json", .data = "independent" });
-    try tmp.dir.writeFile(.{ .sub_path = "cpa-auth/README.txt", .data = "keep" });
-
-    const summary = try registry.reconcileCpaAccounts(gpa, codex_home, &reg, auth_dir);
-
-    try std.testing.expectEqual(@as(usize, 0), summary.synced);
-    try std.testing.expectEqual(@as(usize, 2), summary.removed);
-    try std.testing.expect(!reg.accounts.items[0].smart_pool_enabled);
-    try std.testing.expect(!reg.accounts.items[1].smart_pool_enabled);
-    _ = try tmp.dir.statFile("cpa-auth/codex-independent@example.com.json");
-    _ = try tmp.dir.statFile("cpa-auth/README.txt");
 }

@@ -12,16 +12,16 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
-  - current `schema_version = 5`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 5`.
+  - current `schema_version = 6`
+- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry removed top-level fields, and rewrites them once to normalized `schema_version = 6`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- In the current code, supported automatic migration is `version = 2 -> schema_version = 5`; older current-layout schema `3` and `4` files are rewritten once as schema `5`.
-- Current-layout schema `5` files are also rewritten once when they are missing normalized fields such as `previous_active_account_key` or per-account `smart_pool_enabled`.
+- In the current code, supported automatic migration is `version = 2 -> schema_version = 6`; older current-layout schema `3`, `4`, and `5` files are rewritten once as schema `6`.
+- Current-layout schema `6` files are rewritten once when they are missing normalized fields such as `previous_active_account_key` or a valid root-level `global_route`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Released Schemas
@@ -47,6 +47,11 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Adds per-account `smart_pool_enabled`
   - Missing values from schema `2` through `4` default to `true`, so existing accounts join the smart routing pool automatically
   - Does not change account snapshot filenames or authentication payloads
+- `schema_version = 6`
+  - Removes persisted per-account `smart_pool_enabled`; CPA no longer consumes the Codex Auth account catalog
+  - Adds root-level `global_route` with `direct` and `cpa` values
+  - Every schema `5` or older registry migrates to `direct`, even if an old file contains an untrusted `global_route` value
+  - Account records, active and previous direct selections, snapshots, aliases, and usage data remain intact
 
 ## When To Bump `schema_version`
 
@@ -71,5 +76,6 @@ Do not bump the schema version for:
 
 - A supported older schema must auto-migrate on load and then rewrite `registry.json` in the current format.
 - Supported migrations should preserve account records, active account selection, and account snapshot usability.
+- Removed smart-pool fields are accepted only as legacy input and are omitted from schema 6 output.
 - Migration rewrites create the usual `registry.json.bak.*` backup before replacing the file.
 - `import --purge` remains a manual recovery path if a registry is corrupted or too old for the current binary, but it is not the normal path between supported schemas.

@@ -11,7 +11,7 @@ protocol CommandRunning {
 }
 
 extension CommandRunning {
-    /// 保持普通 CLI 调用的简洁接口，仅智能启动需要附加环境变量。
+    /// 执行不需要额外环境变量的普通命令。
     func run(executableURL: URL, arguments: [String]) async throws -> CommandResult {
         try await run(executableURL: executableURL, arguments: arguments, environment: nil)
     }
@@ -25,59 +25,32 @@ protocol CodexAuthClientProtocol {
     func removeAccount(accountKey: String) async throws -> CodexAuthState
     func setAlias(accountKey: String, alias: String) async throws -> CodexAuthState
     func clearAlias(accountKey: String) async throws -> CodexAuthState
-    func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState
-    func syncCPAAccount(accountKey: String, enabled: Bool) async throws
-    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws
-    func reconcileCPAAccounts() async throws
     func login() async throws -> CodexAuthState
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState
-    func openNewCodexSession(at directoryPath: String) async throws
-    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws
-    func checkCPAConnection() async -> CPAConnectionStatus
-    func pollCPAEvents() async throws -> CPAEventBatch
+    func enableCPARoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState
+    func disableCPARoute() async throws -> CodexAuthState
 }
 
 extension CodexAuthClientProtocol {
-    /// 未实现 Token 扫描的测试或替代客户端返回明确错误。
+    /// 未实现 Token 扫描的替代客户端返回明确错误。
     func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
         throw CodexAuthCLIError.commandFailed("Token usage is unavailable")
     }
-
-    /// 替代客户端未实现 CPA 检查时保持未知状态。
-    func checkCPAConnection() async -> CPAConnectionStatus {
-        .unknown
-    }
-
-    /// 旧测试客户端未实现智能池写入时返回明确错误。
-    func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState {
-        throw CodexAuthCLIError.commandFailed("Smart pool updates are unavailable")
-    }
-
-    /// 兼容尚未实现 CPA 凭据同步的替代客户端。
-    func syncCPAAccount(accountKey: String, enabled: Bool) async throws {}
-
-    /// 兼容尚未实现 CPA 独立授权的替代客户端。
-    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws {
-        try await syncCPAAccount(accountKey: account.accountKey, enabled: enabled)
-    }
-
-    /// 兼容尚未实现 CPA 全目录对账的替代客户端。
-    func reconcileCPAAccounts() async throws {}
 
     /// 未实现 Key 创建的替代客户端返回明确错误。
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState {
         throw CodexAuthCLIError.commandFailed("API Key connections are unavailable")
     }
 
-    /// 未实现直连启动的替代客户端返回明确错误。
-    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws {
-        throw CodexAuthCLIError.commandFailed("Direct launch is unavailable")
+    /// 未实现 CPA 路由的替代客户端返回明确错误。
+    func enableCPARoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState {
+        throw CodexAuthCLIError.commandFailed("CPA routing is unavailable")
     }
 
-    /// 兼容尚未实现 CPA 事件轮询的替代客户端。
-    func pollCPAEvents() async throws -> CPAEventBatch {
-        .empty
+    /// 未实现 CPA 路由的替代客户端返回明确错误。
+    func disableCPARoute() async throws -> CodexAuthState {
+        throw CodexAuthCLIError.commandFailed("CPA routing is unavailable")
     }
 }
 
@@ -100,11 +73,9 @@ enum QuotaProxyConfiguration {
     static let userDefaultsKey = "quotaProxyURL"
     private static let supportedSchemes = ["http", "https", "socks5", "socks5h"]
 
-    /// 校验用户明确填写的代理地址，并生成 curl 同时兼容大小写变量的进程环境。
+    /// 校验代理地址，并生成 curl 兼容的大小写环境变量。
     static func environment(proxyURL rawValue: String?) -> [String: String]? {
-        guard let rawValue else {
-            return nil
-        }
+        guard let rawValue else { return nil }
         let proxyURL = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard
             !proxyURL.isEmpty,
@@ -127,58 +98,35 @@ enum QuotaProxyConfiguration {
 }
 
 struct CodexAuthCLIClient: CodexAuthClientProtocol {
-    private static let ghosttyAppURL = URL(fileURLWithPath: "/Applications/Ghostty.app")
-
     let executableURL: URL
     let runner: CommandRunning
-    let fileExists: (URL) -> Bool
-    let cpaConfigurationProvider: CPAConfigurationProviding
-    let cpaHealthChecker: CPAHealthChecking
-    let cpaEventPoller: CPAEventPolling
-    let cpaOAuthManager: CPAOAuthManaging
-    let terminalLaunchScriptWriter: TerminalLaunchScriptWriting
     let quotaProxyURLProvider: () -> String?
 
-    /// 注入进程、CPA 和临时脚本依赖，使智能启动在测试中不访问真实服务或认证配置。
+    /// 注入进程依赖和额度代理来源，确保测试不访问真实配置。
     init(
         executableURL: URL = CodexAuthCLIClient.defaultExecutableURL(),
         runner: CommandRunning = ProcessCommandRunner(),
-        fileExists: @escaping (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
-        cpaConfigurationProvider: CPAConfigurationProviding = InstalledCPAConfigurationProvider(),
-        cpaHealthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
-        cpaEventPoller: CPAEventPolling = URLSessionCPAEventPoller(),
-        cpaOAuthManager: CPAOAuthManaging = URLSessionCPAOAuthManager(),
-        terminalLaunchScriptWriter: TerminalLaunchScriptWriting = TemporaryTerminalLaunchScriptWriter(),
         quotaProxyURLProvider: @escaping () -> String? = {
             UserDefaults.standard.string(forKey: QuotaProxyConfiguration.userDefaultsKey)
         }
     ) {
         self.executableURL = executableURL
         self.runner = runner
-        self.fileExists = fileExists
-        self.cpaConfigurationProvider = cpaConfigurationProvider
-        self.cpaHealthChecker = cpaHealthChecker
-        self.cpaEventPoller = cpaEventPoller
-        self.cpaOAuthManager = cpaOAuthManager
-        self.terminalLaunchScriptWriter = terminalLaunchScriptWriter
         self.quotaProxyURLProvider = quotaProxyURLProvider
     }
 
+    /// 读取桌面应用所需的完整状态。
     func loadState(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
         try await runStateCommand(["gui", "state"] + apiMode.arguments)
     }
 
-    /// 根据协调器请求选择增量缓存扫描或强制全量解析。
+    /// 根据刷新协调器请求选择增量或全量 Token 扫描。
     func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
         let result = try await runner.run(
             executableURL: executableURL,
             arguments: ["gui", "stats"] + mode.arguments
         )
-        guard result.exitCode == 0 else {
-            let stderr = String(data: result.standardError, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : "unknown error")
-        }
+        guard result.exitCode == 0 else { throw commandFailure(from: result) }
         do {
             return try JSONDecoder.codexAuth.decode(TokenUsageInfo.self, from: result.standardOutput)
         } catch {
@@ -186,6 +134,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         }
     }
 
+    /// 刷新账号额度，并只对该请求注入用户配置的网络代理。
     func refresh(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
         try await runStateCommand(
             ["gui", "refresh"] + apiMode.arguments,
@@ -209,58 +158,11 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         try await runStateCommand(["gui", "alias", "clear", accountKey])
     }
 
-    /// 持久化账号是否参与智能路由池。
-    func setSmartPoolEnabled(accountKey: String, enabled: Bool) async throws -> CodexAuthState {
-        try await runStateCommand(["gui", "smart-pool", accountKey, enabled ? "include" : "exclude"])
-    }
-
-    /// 将单个账号的认证副本同步到独立 CPA 目录，不修改官方 CLI 当前账号。
-    func syncCPAAccount(accountKey: String, enabled: Bool) async throws {
-        let configuration = try cpaConfigurationProvider.load()
-        guard let authDirectoryPath = configuration.authDirectoryPath else {
-            throw CPARuntimeError.missingAuthDirectory
-        }
-        var environment = [String: String]()
-        if let managementKey = configuration.managementKey {
-            environment["CODEX_AUTH_CPA_MANAGEMENT_KEY"] = managementKey
-            environment["CODEX_AUTH_CPA_MANAGEMENT_URL"] = configuration.managementBaseURL
-                .appendingPathComponent("codex-api-key")
-                .absoluteString
-        }
-        try await runVoidCommand([
-            "gui", "cpa-sync", accountKey, enabled ? "include" : "exclude", authDirectoryPath,
-        ], environment: environment.isEmpty ? nil : environment)
-    }
-
-    /// API Key 沿用管理配置同步；ChatGPT 账号通过 CPA 原生 OAuth 独立授权。
-    func setCPAAccountRouting(account: CodexAccount, enabled: Bool) async throws {
-        if account.isAPIKey {
-            try await syncCPAAccount(accountKey: account.accountKey, enabled: enabled)
-            return
-        }
-        let configuration = try cpaConfigurationProvider.load()
-        try await cpaOAuthManager.setRouting(for: account, enabled: enabled, configuration: configuration)
-    }
-
-    /// 将 CPA 专用认证目录收敛到当前注册表智能池，不传递管理密钥或认证内容。
-    func reconcileCPAAccounts() async throws {
-        let configuration: CPAConfiguration
-        do {
-            configuration = try cpaConfigurationProvider.load()
-        } catch CPARuntimeError.missingInstalledConfiguration {
-            return
-        }
-        guard let authDirectoryPath = configuration.authDirectoryPath else {
-            throw CPARuntimeError.missingAuthDirectory
-        }
-        try await runVoidCommand(["gui", "cpa-sync", "reconcile", authDirectoryPath])
-    }
-
     func login() async throws -> CodexAuthState {
         try await runStateCommand(["gui", "login"])
     }
 
-    /// 通过环境变量传递密钥，避免敏感值进入进程参数和系统进程列表。
+    /// 通过环境变量传递密钥，避免敏感值进入进程参数。
     func addAPIKey(alias: String, provider: APIKeyProvider, baseURL: String, apiKey: String) async throws -> CodexAuthState {
         try await runStateCommand(
             ["gui", "add-key", alias, provider.rawValue, baseURL],
@@ -270,145 +172,21 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
 
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState {
         var arguments = ["gui", "import", path]
-        if let alias, !alias.isEmpty {
-            arguments += ["--alias", alias]
-        }
+        if let alias, !alias.isEmpty { arguments += ["--alias", alias] }
         return try await runStateCommand(arguments)
     }
 
-    /// 使用与智能启动相同的配置和端点检测 CPA，但不打开终端。
-    func checkCPAConnection() async -> CPAConnectionStatus {
-        do {
-            let configuration = try cpaConfigurationProvider.load()
-            try await cpaHealthChecker.validate(configuration)
-            return .connected
-        } catch CPARuntimeError.missingAPIKey {
-            return .notConfigured
-        } catch CPARuntimeError.missingInstalledConfiguration {
-            return .notConfigured
-        } catch {
-            return .unavailable
-        }
+    /// 开启全局 CPA provider，客户端密钥仅由后端引用受保护配置文件。
+    func enableCPARoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState {
+        try await runStateCommand(["gui", "cpa-route", "enable", baseURL, clientConfigurationPath])
     }
 
-    /// 读取并消费 CPA 的增量请求事件，用于触发本地 Token 缓存更新。
-    func pollCPAEvents() async throws -> CPAEventBatch {
-        let configuration = try cpaConfigurationProvider.load()
-        return try await cpaEventPoller.poll(configuration)
+    /// 恢复最新备用直连连接。
+    func disableCPARoute() async throws -> CodexAuthState {
+        try await runStateCommand(["gui", "cpa-route", "disable"])
     }
 
-    /// 校验本机 CPA 后，以单次 provider 参数和独立环境变量启动官方 Codex CLI。
-    func openNewCodexSession(at directoryPath: String) async throws {
-        let configuration = try cpaConfigurationProvider.load()
-        try await cpaHealthChecker.validate(configuration)
-        let command = CodexSmartLaunchCommand.build(configuration: configuration)
-        let environment = CodexSmartLaunchEnvironment.build(apiKey: configuration.apiKey)
-
-        try await launchCodexSession(
-            at: directoryPath,
-            command: command,
-            environment: environment
-        )
-    }
-
-    /// 使用当前直连认证启动 Codex；中转站仅对本次进程附加 provider 覆盖。
-    func openDirectCodexSession(at directoryPath: String, account: CodexAccount) async throws {
-        try await launchCodexSession(
-            at: directoryPath,
-            command: CodexDirectLaunchCommand.build(account: account),
-            environment: [:]
-        )
-    }
-
-    /// 在 Ghostty 或 Terminal 中启动指定 Codex 命令，并按名称转交当前会话的环境变量。
-    private func launchCodexSession(
-        at directoryPath: String,
-        command: String,
-        environment: [String: String]
-    ) async throws {
-
-        if !fileExists(Self.ghosttyAppURL) {
-            try await openNewTerminalCodexSession(
-                at: directoryPath,
-                command: command,
-                environment: environment
-            )
-            return
-        }
-
-        let environmentNames = environment.keys.sorted()
-        let environmentSetup = environmentNames.enumerated().map { index, name in
-            "set launchValue\(index) to do shell script \"/usr/bin/printenv \(name)\""
-        }.joined(separator: "\n")
-        let surfaceValues = environmentNames.enumerated().map { index, name in
-            "\"\(name)=\" & launchValue\(index)"
-        }.joined(separator: ", ")
-        let surfaceEnvironment = surfaceValues.isEmpty
-            ? ""
-            : ", environment variables:{\(surfaceValues)}"
-        let script = """
-        set targetPath to \(appleScriptStringLiteral(directoryPath))
-        set initialCommand to \(appleScriptStringLiteral(command)) & linefeed
-        \(environmentSetup)
-        tell application "Ghostty"
-            activate
-            set surfaceConfig to new surface configuration from {initial working directory:targetPath, initial input:initialCommand\(surfaceEnvironment)}
-            if (count of windows) is 0 then
-                new window with configuration surfaceConfig
-            else
-                new tab in front window with configuration surfaceConfig
-            end if
-        end tell
-        """
-        let result = try await runner.run(
-            executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
-            arguments: ["-e", script],
-            environment: environment.isEmpty ? nil : environment
-        )
-        guard result.exitCode == 0 else {
-            let stderr = String(data: result.standardError, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stdout = String(data: result.standardOutput, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : (stdout ?? "unknown error"))
-        }
-    }
-
-    /// Terminal 不支持为新标签直接设置环境变量，因此使用 0700 自删除脚本避免密钥进入历史记录。
-    private func openNewTerminalCodexSession(
-        at directoryPath: String,
-        command: String,
-        environment: [String: String]
-    ) async throws {
-        let launchScript = try terminalLaunchScriptWriter.create(command: command, environment: environment)
-        let script = """
-        set targetPath to \(appleScriptStringLiteral(directoryPath))
-        set launchScript to \(appleScriptStringLiteral(launchScript.path))
-        tell application "Terminal"
-            activate
-            do script "cd " & quoted form of targetPath & " && " & quoted form of launchScript
-        end tell
-        """
-        let result = try await runner.run(
-            executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
-            arguments: ["-e", script]
-        )
-        guard result.exitCode == 0 else {
-            let stderr = String(data: result.standardError, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stdout = String(data: result.standardOutput, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : (stdout ?? "unknown error"))
-        }
-    }
-
-    private func appleScriptStringLiteral(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
-
+    /// 运行返回 GUI 状态 JSON 的命令并统一错误映射。
     private func runStateCommand(
         _ arguments: [String],
         environment: [String: String]? = nil
@@ -418,13 +196,7 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
             arguments: arguments,
             environment: environment
         )
-        guard result.exitCode == 0 else {
-            let stderr = String(data: result.standardError, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stdout = String(data: result.standardOutput, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : (stdout ?? "unknown error"))
-        }
+        guard result.exitCode == 0 else { throw commandFailure(from: result) }
         do {
             return try JSONDecoder.codexAuth.decode(CodexAuthState.self, from: result.standardOutput)
         } catch {
@@ -432,16 +204,16 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
         }
     }
 
-    /// 执行无 JSON 返回值的内部 CLI 命令，并统一保留后端英文错误文本。
-    private func runVoidCommand(_ arguments: [String], environment: [String: String]? = nil) async throws {
-        let result = try await runner.run(executableURL: executableURL, arguments: arguments, environment: environment)
-        guard result.exitCode == 0 else {
-            let stderr = String(data: result.standardError, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stdout = String(data: result.standardOutput, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw CodexAuthCLIError.commandFailed(stderr?.isEmpty == false ? stderr! : (stdout ?? "unknown error"))
-        }
+    /// 优先采用 stderr，并在缺失时回退到 stdout。
+    private func commandFailure(from result: CommandResult) -> CodexAuthCLIError {
+        let stderr = String(data: result.standardError, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stdout = String(data: result.standardOutput, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = stderr?.isEmpty == false
+            ? stderr!
+            : (stdout?.isEmpty == false ? stdout! : "unknown error")
+        return .commandFailed(message)
     }
 
     static func defaultExecutableURL() -> URL {
@@ -464,40 +236,31 @@ struct CodexAuthExecutableResolver {
         )
     }
 
+    /// 按显式路径、仓库构建产物、PATH 和系统回退顺序查找 CLI。
     func resolve() -> URL {
         if let explicitPath = environment["CODEX_AUTH_CLI_PATH"], !explicitPath.isEmpty {
             return URL(fileURLWithPath: explicitPath)
         }
-
         if let bundled = Bundle.main.url(forResource: "codex-auth", withExtension: nil) {
             return bundled
         }
-
         if let repoCandidate = repositoryBuildOutputCandidate(), fileExists(repoCandidate) {
             return repoCandidate
         }
-
         for directory in pathEnvironment.split(separator: ":") {
             let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("codex-auth")
-            if fileExists(candidate) {
-                return candidate
-            }
+            if fileExists(candidate) { return candidate }
         }
-
         return URL(fileURLWithPath: "/usr/local/bin/codex-auth")
     }
 
+    /// 从 Swift 包构建目录向上寻找仓库 Zig 产物。
     private func repositoryBuildOutputCandidate() -> URL? {
-        guard let bundleURL else {
-            return nil
-        }
-
+        guard let bundleURL else { return nil }
         var current = bundleURL.deletingLastPathComponent()
         for _ in 0..<8 {
             let candidate = current.appendingPathComponent("zig-out/bin/codex-auth")
-            if fileExists(candidate) {
-                return candidate
-            }
+            if fileExists(candidate) { return candidate }
             current.deleteLastPathComponent()
         }
         return nil
@@ -505,7 +268,7 @@ struct CodexAuthExecutableResolver {
 }
 
 struct ProcessCommandRunner: CommandRunning {
-    /// 在后台任务中执行阻塞式进程等待，避免菜单栏 UI 的 MainActor 调用链被卡住。
+    /// 在后台任务中等待子进程，避免阻塞菜单栏主线程。
     func run(
         executableURL: URL,
         arguments: [String],
@@ -518,15 +281,12 @@ struct ProcessCommandRunner: CommandRunning {
             var commandEnvironment = CommandEnvironmentBuilder.environment()
             environment?.forEach { commandEnvironment[$0.key] = $0.value }
             process.environment = commandEnvironment
-
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
-
             try process.run()
             process.waitUntilExit()
-
             return CommandResult(
                 exitCode: process.terminationStatus,
                 standardOutput: stdout.fileHandleForReading.readDataToEndOfFile(),
@@ -537,20 +297,15 @@ struct ProcessCommandRunner: CommandRunning {
 }
 
 struct CommandEnvironmentBuilder {
-    private static let commonExecutableDirectories = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-    ]
+    private static let commonExecutableDirectories = ["/opt/homebrew/bin", "/usr/local/bin"]
 
+    /// 补齐桌面 App 常缺失的 Homebrew 可执行目录。
     static func environment(from base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
         var environment = base
-        let existingPath = environment["PATH"] ?? ""
-        var entries = existingPath.split(separator: ":").map(String.init)
-
+        var entries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         for directory in commonExecutableDirectories where !entries.contains(directory) {
             entries.append(directory)
         }
-
         environment["PATH"] = entries.joined(separator: ":")
         return environment
     }

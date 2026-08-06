@@ -58,8 +58,10 @@ When switching succeeds:
 3. `active_account_key` is updated in `registry.json`.
 4. `previous_active_account_key` records the account that was active before the switch, when one exists.
 5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
-6. `~/.codex/config.toml` is patched for the selected connection while unrelated settings, tables, comments, and file permissions are preserved.
+6. When `global_route` is `direct`, `~/.codex/config.toml` is patched for the selected connection while unrelated settings, tables, comments, and file permissions are preserved.
 
 ChatGPT account selections set the managed model and account defaults, and remove the API-key-only custom provider. API key selections use the CC Switch-compatible `model_provider = "custom"` and `[model_providers.custom]` format with the selected connection's Base URL. Switching does not manage `model_reasoning_effort`; an existing value is preserved, and an absent value continues to use the Codex default.
 
-Configuration changes apply to newly started Codex processes or threads. Existing processes do not reload `config.toml` automatically. Because Codex associates session visibility with the active model provider, sessions created with the built-in OpenAI provider may be hidden while the custom provider is active; switching back to a ChatGPT account makes those sessions visible again without deleting their files.
+When `global_route` is `cpa`, switching still updates `auth.json`, `active_account_key`, and the connection that will be used after CPA is disabled. It does not replace `model_provider = "codex_auth_cpa"` in `config.toml` and does not modify any CPA account or Key data.
+
+Provider configuration changes apply to newly started Codex processes or threads. Existing processes do not reload `config.toml` automatically. Because Codex associates session visibility with the active model provider, sessions created with one provider may be hidden while another provider is active; switching the global route back makes those sessions visible again without deleting their files.

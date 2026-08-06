@@ -13,6 +13,7 @@ const version = @import("../version.zig");
 
 const PlanType = common.PlanType;
 const AuthMode = common.AuthMode;
+const GlobalRoute = common.GlobalRoute;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RolloutSignature = common.RolloutSignature;
 const LiveConfig = common.LiveConfig;
@@ -74,6 +75,7 @@ fn freeLegacyAccountRecord(allocator: std.mem.Allocator, rec: *LegacyAccountReco
 pub fn defaultRegistry() Registry {
     return Registry{
         .schema_version = current_schema_version,
+        .global_route = .direct,
         .active_account_key = null,
         .previous_active_account_key = null,
         .active_account_activated_at_ms = null,
@@ -318,6 +320,8 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     var reg = defaultRegistry();
     errdefer reg.deinit(allocator);
 
+    reg.global_route = parseGlobalRoute(root_obj.get("global_route"));
+
     if (root_obj.get("active_account_key")) |v| {
         switch (v) {
             .string => |s| reg.active_account_key = try allocator.dupe(u8, s),
@@ -383,28 +387,27 @@ fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
         return true;
     }
     if (root_obj.get("previous_active_account_key") == null) return true;
-    if (accountsNeedSmartPoolRewrite(root_obj)) return true;
+    if (!hasValidGlobalRoute(root_obj.get("global_route"))) return true;
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
 }
 
-/// 检查当前布局中的账号是否缺少 schema 5 的智能池字段或使用了错误类型。
-fn accountsNeedSmartPoolRewrite(root_obj: std.json.ObjectMap) bool {
-    const accounts = switch (root_obj.get("accounts") orelse return false) {
-        .array => |items| items,
+/// 将缺失或无效的持久化路由安全降级为直连。
+fn parseGlobalRoute(value: ?std.json.Value) GlobalRoute {
+    const text = switch (value orelse return .direct) {
+        .string => |route| route,
+        else => return .direct,
+    };
+    if (std.mem.eql(u8, text, "cpa")) return .cpa;
+    return .direct;
+}
+
+/// 判断 schema 6 的根级路由字段是否可直接复用。
+fn hasValidGlobalRoute(value: ?std.json.Value) bool {
+    const text = switch (value orelse return false) {
+        .string => |route| route,
         else => return false,
     };
-    for (accounts.items) |item| {
-        const account = switch (item) {
-            .object => |value| value,
-            else => continue,
-        };
-        const enabled = account.get("smart_pool_enabled") orelse return true;
-        switch (enabled) {
-            .bool => {},
-            else => return true,
-        }
-    }
-    return false;
+    return std.mem.eql(u8, text, "direct") or std.mem.eql(u8, text, "cpa");
 }
 
 fn parseRegistryLiveConfig(live: *LiveConfig, root_obj: std.json.ObjectMap) void {
@@ -423,9 +426,9 @@ fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
     return schemaVersionFieldValue(root_obj) orelse if (root_obj.get("active_email") != null) 2 else current_schema_version;
 }
 
+/// 应用仅依赖版本号的安全迁移；旧版本从未拥有可信的全局 CPA 路由状态。
 fn applySchemaMigrations(reg: *Registry, loaded_schema_version: u32) void {
-    _ = reg;
-    _ = loaded_schema_version;
+    if (loaded_schema_version < 6) reg.global_route = .direct;
 }
 
 fn logUnsupportedRegistryVersion(version_value: u32) void {
@@ -474,7 +477,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3, 4, 5 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4, 5, 6 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",

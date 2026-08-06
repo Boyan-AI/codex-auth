@@ -51,8 +51,8 @@ struct AccountRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // 后台额度刷新不应锁住直连账号选择，只阻止重复账号切换。
-        .disabled(appState.isAccountSwitchInProgress)
+        // 后台额度刷新不应锁住直连账号选择，但 CPA 启停期间必须保持路由状态稳定。
+        .disabled(appState.isAccountSwitchInProgress || appState.isCPAOperationInProgress)
         .background(selectionBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }

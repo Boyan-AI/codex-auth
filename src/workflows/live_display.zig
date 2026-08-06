@@ -239,6 +239,7 @@ pub fn cloneRegistryAlloc(allocator: std.mem.Allocator, reg: *const registry.Reg
 
     var cloned: registry.Registry = .{
         .schema_version = reg.schema_version,
+        .global_route = reg.global_route,
         .active_account_key = active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
         .api = reg.api,
@@ -290,6 +291,7 @@ pub fn applyPersistedActiveAccountToDisplay(
     display: *cli.live.OwnedSwitchSelectionDisplay,
     persisted_reg: *const registry.Registry,
 ) !void {
+    display.reg.global_route = persisted_reg.global_route;
     const active_account_key = if (persisted_reg.active_account_key) |value|
         if (findAccountIndexByAccountKeyConst(&display.reg, value) != null) value else null
     else
@@ -335,6 +337,7 @@ pub fn buildRemoveLiveActionDisplay(
 ) !cli.live.OwnedSwitchSelectionDisplay {
     var reg: registry.Registry = .{
         .schema_version = current_display.reg.schema_version,
+        .global_route = persisted_reg.global_route,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
         .api = current_display.reg.api,

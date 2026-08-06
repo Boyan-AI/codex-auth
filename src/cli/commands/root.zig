@@ -96,13 +96,12 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
         .gui => |opts| switch (opts) {
             .switch_account => |account_key| allocator.free(account_key),
             .remove_account => |account_key| allocator.free(account_key),
-            .smart_pool => |pool_opts| allocator.free(pool_opts.account_key),
-            .cpa_sync => |sync_opts| switch (sync_opts) {
-                .account => |account_opts| {
-                    allocator.free(account_opts.account_key);
-                    allocator.free(account_opts.auth_dir);
+            .cpa_route => |route_opts| switch (route_opts) {
+                .enable => |enable_opts| {
+                    allocator.free(enable_opts.base_url);
+                    allocator.free(enable_opts.client_config_path);
                 },
-                .reconcile => |auth_dir| allocator.free(auth_dir),
+                .disable => {},
             },
             .add_api_key => |add_opts| {
                 allocator.free(add_opts.alias);
