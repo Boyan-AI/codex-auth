@@ -219,7 +219,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.isCPAEnabled)
     }
 
-    /// 验证管理页动作只委托 CPA 运行时，不调用账号 API。
+    /// 验证管理页动作只委托 CPAMP 运行时，不调用账号 API。
     func testOpenManagementPageDelegatesToRuntime() async {
         let runtime = StubCPAServiceRuntime()
         let appState = AppState(client: StubCodexAuthClient(state: makeState()), cpaRuntime: runtime)
@@ -229,7 +229,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(runtime.openManagementCallCount, 1)
     }
 
-    /// 验证复制管理密钥只委托 CPA 运行时，并给出完成状态。
+    /// 验证复制 CPAMP 管理员密钥只委托运行时，并给出完成状态。
     func testCopyManagementKeyDelegatesToRuntime() {
         let runtime = StubCPAServiceRuntime()
         let appState = AppState(client: StubCodexAuthClient(state: makeState()), cpaRuntime: runtime)
@@ -237,7 +237,7 @@ final class AppStateTests: XCTestCase {
         appState.copyCPAManagementKey()
 
         XCTAssertEqual(runtime.copyManagementKeyCallCount, 1)
-        XCTAssertEqual(appState.notice, "已复制 CPA 管理密钥。")
+        XCTAssertEqual(appState.notice, "已复制 CPAMP 管理员密钥。")
     }
 
     /// 验证添加 Key 不产生任何 CPA 路由或账号同步调用。

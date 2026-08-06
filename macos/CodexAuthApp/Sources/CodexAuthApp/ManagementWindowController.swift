@@ -200,7 +200,7 @@ private struct ManagementRootView: View {
     }
 }
 
-/// 展示 CPA 独立服务状态、全局开关和原生管理页入口。
+/// 展示 CPA 独立服务状态、全局开关和 CPAMP Full Mode 管理页入口。
 private struct RoutingManagementView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -235,6 +235,12 @@ private struct RoutingManagementView: View {
                         .textSelection(.enabled)
                 }
                 GridRow {
+                    Text("管理地址")
+                    Text("http://127.0.0.1:18317")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                GridRow {
                     Text("当前路由")
                     Text(appState.isCPAEnabled ? "CPA" : "直连")
                         .foregroundStyle(.secondary)
@@ -255,7 +261,7 @@ private struct RoutingManagementView: View {
                 Button {
                     appState.copyCPAManagementKey()
                 } label: {
-                    Label("复制管理密钥", systemImage: "doc.on.doc")
+                    Label("复制 CPAMP 管理员密钥", systemImage: "doc.on.doc")
                 }
                 .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
                 Spacer()

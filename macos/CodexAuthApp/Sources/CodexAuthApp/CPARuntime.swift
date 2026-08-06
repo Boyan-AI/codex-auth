@@ -1,6 +1,5 @@
 import AppKit
 import CFNetwork
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -32,6 +31,7 @@ enum CPAServiceStatus: Equatable {
 enum CPARuntimeError: LocalizedError, Equatable {
     case missingAPIKey
     case missingManagementKey
+    case missingCPAManagerConfiguration
     case missingInstalledConfiguration
     case missingLaunchAgent
     case invalidInstalledConfiguration(String)
@@ -47,6 +47,7 @@ enum CPARuntimeError: LocalizedError, Equatable {
         switch self {
         case .missingAPIKey: return "尚未配置 CPA 客户端 Key。"
         case .missingManagementKey: return "尚未配置 CPA 管理密钥。"
+        case .missingCPAManagerConfiguration: return "尚未安装 CPA Manager Plus。"
         case .missingInstalledConfiguration: return "尚未安装 CPA 运行配置。"
         case .missingLaunchAgent: return "尚未安装 CPA 用户级服务。"
         case .invalidInstalledConfiguration(let reason): return "CPA 运行配置无效：\(reason)"
@@ -134,11 +135,58 @@ enum CPAInstallationPaths {
             .appendingPathComponent("\(launchAgentLabel).plist")
     }
 
+    /// 返回 CPAMP 安装器写入的管理员密钥文件路径。
+    static func managerAdminKeyURL(fileManager: FileManager = .default) -> URL {
+        applicationSupportURL(fileManager: fileManager)
+            .appendingPathComponent("CPAMP", isDirectory: true)
+            .appendingPathComponent("admin-key")
+    }
+
     /// 返回 Codex Auth 的用户级应用支持目录。
     private static func applicationSupportURL(fileManager: FileManager) -> URL {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Codex Auth", isDirectory: true)
+    }
+}
+
+/// 保存 CPAMP Full Mode 的本机管理入口和管理员密钥。
+struct CPAManagerConfiguration: Equatable {
+    static let defaultBaseURL = URL(string: "http://127.0.0.1:18317")!
+
+    let baseURL: URL
+    let adminKey: String
+
+    /// 返回 CPAMP 管理页地址，不把管理员密钥放入 URL。
+    var managementPageURL: URL {
+        baseURL.appendingPathComponent("management.html")
+    }
+
+    init(baseURL: URL = defaultBaseURL, adminKey: String) {
+        self.baseURL = baseURL
+        self.adminKey = adminKey
+    }
+}
+
+protocol CPAManagerConfigurationProviding {
+    func load() throws -> CPAManagerConfiguration
+}
+
+/// 从安装器生成的受保护文件读取 CPAMP 管理员密钥。
+struct InstalledCPAManagerConfigurationProvider: CPAManagerConfigurationProviding {
+    let configurationURL: URL
+
+    init(configurationURL: URL = CPAInstallationPaths.managerAdminKeyURL()) {
+        self.configurationURL = configurationURL
+    }
+
+    func load() throws -> CPAManagerConfiguration {
+        guard let data = FileManager.default.contents(atPath: configurationURL.path),
+              let adminKey = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !adminKey.isEmpty else {
+            throw CPARuntimeError.missingCPAManagerConfiguration
+        }
+        return CPAManagerConfiguration(adminKey: adminKey)
     }
 }
 
@@ -242,6 +290,35 @@ struct URLSessionCPAHealthChecker: CPAHealthChecking {
     }
 }
 
+protocol CPAManagerHealthChecking {
+    func validate(_ configuration: CPAManagerConfiguration) async throws
+}
+
+/// 检查 CPAMP Manager Server 是否已监听并完成启动。
+struct URLSessionCPAManagerHealthChecker: CPAManagerHealthChecking {
+    let session: URLSession
+
+    init(session: URLSession = CPALoopbackURLSession.shared) {
+        self.session = session
+    }
+
+    /// 健康端点无需密钥，管理员密钥只用于后续管理 API。
+    func validate(_ configuration: CPAManagerConfiguration) async throws {
+        var request = URLRequest(url: configuration.baseURL.appendingPathComponent("health"))
+        request.timeoutInterval = 3
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw CPARuntimeError.unavailable("CPAMP HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+            }
+        } catch let error as CPARuntimeError {
+            throw error
+        } catch {
+            throw CPARuntimeError.unavailable("CPAMP (error.localizedDescription)")
+        }
+    }
+}
+
 /// 保存健康检查所需的最小模型目录。
 struct CPAModelCatalog: Equatable {
     let modelIDs: [String]
@@ -260,19 +337,18 @@ protocol CPAConfigurationContractChecking {
     func validate(_ configuration: CPAConfiguration) async throws
 }
 
-/// 保存已认证 Management API 和本地面板资产的最小检查结果。
+/// 保存已认证 CPA Management API 的最小检查结果。
 struct CPAManagementSnapshot: Equatable {
     let version: String
     let apiKeys: [String]
     let rawConfiguration: String
-    let managementPanelSHA256: String
 }
 
 protocol CPAManagementInspecting {
     func inspect(_ configuration: CPAConfiguration) async throws -> CPAManagementSnapshot
 }
 
-/// 通过固定本机端点读取 CPA 版本、客户端 Key、原始配置和面板摘要。
+/// 通过固定本机端点读取 CPA 版本、客户端 Key 和原始配置。
 struct URLSessionCPAManagementInspector: CPAManagementInspecting {
     let session: URLSession
 
@@ -312,18 +388,13 @@ struct URLSessionCPAManagementInspector: CPAManagementInspecting {
             throw CPARuntimeError.incompatibleConfiguration("CPA config.yaml 不是有效 UTF-8")
         }
 
-        let (managementPanel, _) = try await fetch(configuration.managementPageURL, managementKey: nil)
-        let panelDigest = SHA256.hash(data: managementPanel)
-            .map { String(format: "%02x", $0) }
-            .joined()
         let version = configurationResponse.value(forHTTPHeaderField: "X-CPA-VERSION")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         return CPAManagementSnapshot(
             version: version,
             apiKeys: responseDocument.apiKeys,
-            rawConfiguration: rawConfiguration,
-            managementPanelSHA256: panelDigest
+            rawConfiguration: rawConfiguration
         )
     }
 
@@ -370,7 +441,6 @@ private struct CPAOwnedConfigurationContract: Equatable {
     let port: Int
     let allowRemote: Bool
     let disableControlPanel: Bool
-    let disableAutoUpdatePanel: Bool
 
     /// 要求五个字段均以唯一标准映射出现，不支持的 YAML 写法直接拒绝。
     static func decode(_ source: String) throws -> CPAOwnedConfigurationContract {
@@ -396,11 +466,6 @@ private struct CPAOwnedConfigurationContract: Equatable {
             in: remoteLines,
             indentation: childIndentation
         ).value
-        let disableAutoUpdatePanelValue = try uniqueValue(
-            named: "disable-auto-update-panel",
-            in: remoteLines,
-            indentation: childIndentation
-        ).value
 
         guard let port = Int(portValue) else {
             throw incompatible("port 必须是整数")
@@ -409,11 +474,7 @@ private struct CPAOwnedConfigurationContract: Equatable {
             host: try plainString(hostValue, field: "host"),
             port: port,
             allowRemote: try boolean(allowRemoteValue, field: "allow-remote"),
-            disableControlPanel: try boolean(disableControlPanelValue, field: "disable-control-panel"),
-            disableAutoUpdatePanel: try boolean(
-                disableAutoUpdatePanelValue,
-                field: "disable-auto-update-panel"
-            )
+            disableControlPanel: try boolean(disableControlPanelValue, field: "disable-control-panel")
         )
     }
 
@@ -557,24 +618,20 @@ private struct CPAOwnedConfigurationContract: Equatable {
 /// 校验应用拥有的本机地址、密钥和 CPA 管理配置契约。
 struct InstalledCPAConfigurationContractChecker: CPAConfigurationContractChecking {
     static let pinnedVersion = "7.2.116"
-    static let pinnedManagementPanelSHA256 = "1d885552cc2d12b98613f31f2bc326e321c81dcbb792afb1e0b0066ecb74028e"
 
     let inspector: CPAManagementInspecting
     let expectedVersion: String
-    let expectedPanelSHA256: String
     let credentialHelperIsExecutable: (URL) -> Bool
 
     init(
         inspector: CPAManagementInspecting = URLSessionCPAManagementInspector(),
         expectedVersion: String = pinnedVersion,
-        expectedPanelSHA256: String = pinnedManagementPanelSHA256,
         credentialHelperIsExecutable: @escaping (URL) -> Bool = {
             FileManager.default.isExecutableFile(atPath: $0.path)
         }
     ) {
         self.inspector = inspector
         self.expectedVersion = expectedVersion
-        self.expectedPanelSHA256 = expectedPanelSHA256
         self.credentialHelperIsExecutable = credentialHelperIsExecutable
     }
 
@@ -621,14 +678,9 @@ struct InstalledCPAConfigurationContractChecker: CPAConfigurationContractCheckin
             throw CPARuntimeError.incompatibleConfiguration("CPA 远程管理必须关闭")
         }
         guard !ownedConfiguration.disableControlPanel else {
-            throw CPARuntimeError.incompatibleConfiguration("CPA 管理面板必须开启")
+            throw CPARuntimeError.incompatibleConfiguration("CPA 管理 API 必须开启")
         }
-        guard ownedConfiguration.disableAutoUpdatePanel else {
-            throw CPARuntimeError.incompatibleConfiguration("CPA 管理面板自动更新必须关闭")
-        }
-        guard snapshot.managementPanelSHA256.lowercased() == expectedPanelSHA256.lowercased() else {
-            throw CPARuntimeError.incompatibleConfiguration("CPA 管理面板版本不匹配")
-        }
+        // 管理页面已迁移到 CPAMP，CPA 仅保留网关与 Management API 契约。
     }
 }
 
@@ -768,6 +820,8 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
     let configurationProvider: CPAConfigurationProviding
     let healthChecker: CPAHealthChecking
     let contractChecker: CPAConfigurationContractChecking
+    let managerConfigurationProvider: CPAManagerConfigurationProviding
+    let managerHealthChecker: CPAManagerHealthChecking
     let browser: CPABrowserOpening
     let clipboard: CPAClipboardWriting
     let startupRetryDelaysNanoseconds: [UInt64]
@@ -778,6 +832,8 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         configurationProvider: CPAConfigurationProviding = InstalledCPAConfigurationProvider(),
         healthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
         contractChecker: CPAConfigurationContractChecking = InstalledCPAConfigurationContractChecker(),
+        managerConfigurationProvider: CPAManagerConfigurationProviding = InstalledCPAManagerConfigurationProvider(),
+        managerHealthChecker: CPAManagerHealthChecking = URLSessionCPAManagerHealthChecker(),
         browser: CPABrowserOpening = SystemCPABrowser(),
         clipboard: CPAClipboardWriting = SystemCPAClipboard(),
         startupRetryDelaysNanoseconds: [UInt64] = CPAServiceRuntime.defaultStartupRetryDelaysNanoseconds,
@@ -789,6 +845,8 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         self.configurationProvider = configurationProvider
         self.healthChecker = healthChecker
         self.contractChecker = contractChecker
+        self.managerConfigurationProvider = managerConfigurationProvider
+        self.managerHealthChecker = managerHealthChecker
         self.browser = browser
         self.clipboard = clipboard
         self.startupRetryDelaysNanoseconds = startupRetryDelaysNanoseconds
@@ -843,20 +901,19 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     }
 
-    /// 仅在服务健康且配置兼容时打开不含密钥的原生管理页。
+    /// 仅在 CPA 与 CPAMP 均健康时打开不含密钥的 Full Mode 管理页。
     func openManagementPage() async throws {
-        let configuration = try configurationProvider.load()
-        try await contractChecker.validate(configuration)
-        try await healthChecker.validate(configuration)
-        guard browser.open(configuration.managementPageURL) else {
+        let managerConfiguration = try managerConfigurationProvider.load()
+        try await managerHealthChecker.validate(managerConfiguration)
+        guard browser.open(managerConfiguration.managementPageURL) else {
             throw CPARuntimeError.browserOpenFailed
         }
     }
 
-    /// 只在用户触发复制命令时读取并写入管理密钥。
+    /// 只在用户触发复制命令时读取并写入 CPAMP 管理员密钥。
     func copyManagementKey() throws {
-        let configuration = try configurationProvider.load()
-        guard clipboard.write(configuration.managementKey) else {
+        let managerConfiguration = try managerConfigurationProvider.load()
+        guard clipboard.write(managerConfiguration.adminKey) else {
             throw CPARuntimeError.clipboardWriteFailed
         }
     }

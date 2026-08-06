@@ -1,4 +1,3 @@
-import CryptoKit
 import CFNetwork
 import Foundation
 import XCTest
@@ -110,7 +109,6 @@ final class CPARuntimeTests: XCTestCase {
         let checker = InstalledCPAConfigurationContractChecker(
             inspector: FixedCPAManagementInspector(snapshot: makeManagementSnapshot()),
             expectedVersion: "7.2.116",
-            expectedPanelSHA256: "panel-sha",
             credentialHelperIsExecutable: { _ in false }
         )
 
@@ -131,14 +129,13 @@ final class CPARuntimeTests: XCTestCase {
         await assertIncompatible(checker: checker)
     }
 
-    /// 验证非回环监听、错误端口和不安全面板开关均会失败关闭。
+    /// 验证非回环监听、错误端口和不安全管理开关均会失败关闭。
     func testContractRejectsUnsafeManagedConfigurationFields() async throws {
         let unsafeDocuments = [
             validManagedConfiguration.replacingOccurrences(of: #"host: "127.0.0.1""#, with: #"host: "0.0.0.0""#),
             validManagedConfiguration.replacingOccurrences(of: "port: 8317", with: "port: 8318"),
             validManagedConfiguration.replacingOccurrences(of: "allow-remote: false", with: "allow-remote: true"),
             validManagedConfiguration.replacingOccurrences(of: "disable-control-panel: false", with: "disable-control-panel: true"),
-            validManagedConfiguration.replacingOccurrences(of: "disable-auto-update-panel: true", with: "disable-auto-update-panel: false"),
         ]
 
         for document in unsafeDocuments {
@@ -150,7 +147,7 @@ final class CPARuntimeTests: XCTestCase {
     /// 验证缺少或重复应用拥有字段的 YAML 不会被含糊接受。
     func testContractRejectsAmbiguousManagedConfiguration() async throws {
         let missingField = validManagedConfiguration.replacingOccurrences(
-            of: "  disable-auto-update-panel: true\n",
+            of: "  allow-remote: false\n",
             with: ""
         )
         let duplicateField = validManagedConfiguration + "\n" + #"host: "127.0.0.1""# + "\n"
@@ -161,14 +158,7 @@ final class CPARuntimeTests: XCTestCase {
         }
     }
 
-    /// 验证服务实际返回的管理面板必须匹配固定资产摘要。
-    func testContractRejectsUnexpectedManagementPanel() async throws {
-        let checker = makeContractChecker(snapshot: makeManagementSnapshot(panelSHA256: "other-sha"))
-
-        await assertIncompatible(checker: checker)
-    }
-
-    /// 验证管理检查器只访问固定端点，且不把 Management Key 发送给面板资产。
+    /// 验证管理检查器只访问 CPA Management API，并发送独立 Management Key。
     func testManagementInspectorBuildsAuthenticatedSnapshotWithoutLeakingKey() async throws {
         let protocolType = RecordingCPAURLProtocol.self
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -194,8 +184,6 @@ final class CPARuntimeTests: XCTestCase {
                 )
             case "/v0/management/config.yaml":
                 return try Self.response(for: request, body: self.validManagedConfiguration)
-            case "/management.html":
-                return try Self.response(for: request, body: "management-panel")
             default:
                 throw CPARuntimeError.unavailable("unexpected path \(path)")
             }
@@ -207,18 +195,12 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.version, "7.2.116")
         XCTAssertEqual(snapshot.apiKeys, ["client-key"])
         XCTAssertEqual(snapshot.rawConfiguration, validManagedConfiguration)
-        XCTAssertEqual(
-            snapshot.managementPanelSHA256,
-            SHA256.hash(data: Data("management-panel".utf8)).map { String(format: "%02x", $0) }.joined()
-        )
         XCTAssertEqual(requests.map { $0.url?.path }, [
             "/v0/management/config",
             "/v0/management/config.yaml",
-            "/management.html",
         ])
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "X-Management-Key"), "management-key")
         XCTAssertEqual(requests[1].value(forHTTPHeaderField: "X-Management-Key"), "management-key")
-        XCTAssertNil(requests[2].value(forHTTPHeaderField: "X-Management-Key"))
     }
 
     /// 验证尚未添加上游账号时，有效空模型目录仍表示服务与客户端 Key 可用。
@@ -366,23 +348,23 @@ final class CPARuntimeTests: XCTestCase {
         }
     }
 
-    /// 验证打开管理页前不会向尚未通过契约检查的回环端点发送客户端 Key。
-    func testRuntimeValidatesContractBeforeManagementPageHealthCheck() async {
-        let recorder = RuntimeValidationRecorder()
+    /// 验证 CPAMP 未就绪时不会打开管理页。
+    func testRuntimeRequiresCPAManagerHealthBeforeOpeningPage() async {
         let browser = RecordingCPABrowser()
         let runtime = CPAServiceRuntime(
             serviceController: StubCPAServiceController(),
             configurationProvider: FixedCPAConfigurationProvider(configuration: try! makeConfiguration()),
-            healthChecker: RecordingCPAHealthChecker(recorder: recorder),
-            contractChecker: RecordingCPAContractChecker(recorder: recorder, rejects: true),
+            healthChecker: SuccessfulCPAHealthChecker(),
+            contractChecker: AcceptingCPAContractChecker(),
+            managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
+            managerHealthChecker: FailingCPAManagerHealthChecker(),
             browser: browser
         )
 
         do {
             try await runtime.openManagementPage()
-            XCTFail("Expected contract validation failure")
+            XCTFail("Expected CPAMP health check failure")
         } catch {
-            XCTAssertEqual(recorder.events, ["contract"])
             XCTAssertTrue(browser.openedURLs.isEmpty)
         }
     }
@@ -395,12 +377,14 @@ final class CPARuntimeTests: XCTestCase {
             configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
             healthChecker: SuccessfulCPAHealthChecker(),
             contractChecker: AcceptingCPAContractChecker(),
+            managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
+            managerHealthChecker: SuccessfulCPAManagerHealthChecker(),
             browser: browser
         )
 
         try await runtime.openManagementPage()
 
-        XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:8317/management.html")!])
+        XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:18317/management.html")!])
         XCTAssertFalse(browser.openedURLs[0].absoluteString.contains("client-key"))
     }
 
@@ -412,6 +396,8 @@ final class CPARuntimeTests: XCTestCase {
             configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
             healthChecker: SuccessfulCPAHealthChecker(),
             contractChecker: AcceptingCPAContractChecker(),
+            managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
+            managerHealthChecker: SuccessfulCPAManagerHealthChecker(),
             browser: RecordingCPABrowser(),
             clipboard: clipboard
         )
@@ -419,7 +405,7 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertTrue(clipboard.values.isEmpty)
         try runtime.copyManagementKey()
 
-        XCTAssertEqual(clipboard.values, ["management-key"])
+        XCTAssertEqual(clipboard.values, ["cpamp-admin-key"])
     }
 
     /// 验证 launchd 已加载但模型端点失败时，状态映射为不可用。
@@ -478,7 +464,6 @@ final class CPARuntimeTests: XCTestCase {
         InstalledCPAConfigurationContractChecker(
             inspector: FixedCPAManagementInspector(snapshot: snapshot),
             expectedVersion: "7.2.116",
-            expectedPanelSHA256: "panel-sha",
             credentialHelperIsExecutable: { _ in true }
         )
     }
@@ -487,14 +472,12 @@ final class CPARuntimeTests: XCTestCase {
     private func makeManagementSnapshot(
         version: String = "7.2.116",
         apiKeys: [String] = ["client-key"],
-        rawConfiguration: String? = nil,
-        panelSHA256: String = "panel-sha"
+        rawConfiguration: String? = nil
     ) -> CPAManagementSnapshot {
         CPAManagementSnapshot(
             version: version,
             apiKeys: apiKeys,
-            rawConfiguration: rawConfiguration ?? validManagedConfiguration,
-            managementPanelSHA256: panelSHA256
+            rawConfiguration: rawConfiguration ?? validManagedConfiguration
         )
     }
 
@@ -588,6 +571,25 @@ private final class StubCPAServiceController: CPAServiceControlling {
 private struct FixedCPAConfigurationProvider: CPAConfigurationProviding {
     let configuration: CPAConfiguration
     func load() throws -> CPAConfiguration { configuration }
+}
+
+/// 为 CPAMP 管理页测试提供固定管理员密钥。
+private struct FixedCPAManagerConfigurationProvider: CPAManagerConfigurationProviding {
+    func load() throws -> CPAManagerConfiguration {
+        CPAManagerConfiguration(adminKey: "cpamp-admin-key")
+    }
+}
+
+/// CPAMP 健康检查成功替身。
+private struct SuccessfulCPAManagerHealthChecker: CPAManagerHealthChecking {
+    func validate(_ configuration: CPAManagerConfiguration) async throws {}
+}
+
+/// CPAMP 健康检查失败替身。
+private struct FailingCPAManagerHealthChecker: CPAManagerHealthChecking {
+    func validate(_ configuration: CPAManagerConfiguration) async throws {
+        throw CPARuntimeError.unavailable("CPAMP test")
+    }
 }
 
 /// 健康检查成功替身。

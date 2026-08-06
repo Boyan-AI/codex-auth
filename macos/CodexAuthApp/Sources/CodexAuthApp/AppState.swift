@@ -230,7 +230,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 健康检查通过后使用系统浏览器打开 CPA 原生管理页。
+    /// CPAMP 健康检查通过后使用系统浏览器打开 Full Mode 管理页。
     func openCPAManagementPage() async {
         errorMessage = nil
         do {
@@ -246,7 +246,7 @@ final class AppState: ObservableObject {
         errorMessage = nil
         do {
             try cpaRuntime.copyManagementKey()
-            notice = "已复制 CPA 管理密钥。"
+            notice = "已复制 CPAMP 管理员密钥。"
         } catch {
             errorMessage = error.localizedDescription
         }

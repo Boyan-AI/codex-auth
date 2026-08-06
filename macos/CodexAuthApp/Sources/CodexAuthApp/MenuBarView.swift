@@ -67,7 +67,7 @@ struct MenuBarView: View {
                 Label("复制密钥", systemImage: "doc.on.doc")
             }
             .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
-            .help("复制 CPA 管理密钥")
+            .help("复制 CPAMP 管理员密钥")
 
             Button {
                 closeMenu()
