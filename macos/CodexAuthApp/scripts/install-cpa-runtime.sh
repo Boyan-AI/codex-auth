@@ -3,8 +3,8 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly EXPECTED_CPA_VERSION="7.2.116"
-readonly EXPECTED_CPA_ARCHIVE_SHA256="8c4763e092efff7b2734b4eff0d967571ca69304c03a2ea9a420ca63c3e7471c"
+readonly EXPECTED_CPA_VERSION="7.2.120"
+readonly EXPECTED_CPA_ARCHIVE_SHA256="01ebcb3a683560c91f532fb124ac30edcc68945859e3ddf4880e09f1979ffdee"
 readonly EXPECTED_PANEL_VERSION="v1.21.4"
 readonly EXPECTED_PANEL_SHA256="1d885552cc2d12b98613f31f2bc326e321c81dcbb792afb1e0b0066ecb74028e"
 readonly LAUNCH_AGENT_LABEL="com.codex-auth.cpa"

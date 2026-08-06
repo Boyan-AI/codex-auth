@@ -108,7 +108,7 @@ final class CPARuntimeTests: XCTestCase {
     func testContractRejectsMissingCredentialHelper() async throws {
         let checker = InstalledCPAConfigurationContractChecker(
             inspector: FixedCPAManagementInspector(snapshot: makeManagementSnapshot()),
-            expectedVersion: "7.2.116",
+            expectedVersion: "7.2.120",
             credentialHelperIsExecutable: { _ in false }
         )
 
@@ -179,7 +179,7 @@ final class CPARuntimeTests: XCTestCase {
             case "/v0/management/config":
                 return try Self.response(
                     for: request,
-                    headers: ["X-CPA-VERSION": "7.2.116"],
+                    headers: ["X-CPA-VERSION": "7.2.120"],
                     body: #"{"api-keys":["client-key"]}"#
                 )
             case "/v0/management/config.yaml":
@@ -192,7 +192,7 @@ final class CPARuntimeTests: XCTestCase {
         let snapshot = try await URLSessionCPAManagementInspector(session: session)
             .inspect(makeConfiguration())
 
-        XCTAssertEqual(snapshot.version, "7.2.116")
+        XCTAssertEqual(snapshot.version, "7.2.120")
         XCTAssertEqual(snapshot.apiKeys, ["client-key"])
         XCTAssertEqual(snapshot.rawConfiguration, validManagedConfiguration)
         XCTAssertEqual(requests.map { $0.url?.path }, [
@@ -463,14 +463,14 @@ final class CPARuntimeTests: XCTestCase {
     private func makeContractChecker(snapshot: CPAManagementSnapshot) -> InstalledCPAConfigurationContractChecker {
         InstalledCPAConfigurationContractChecker(
             inspector: FixedCPAManagementInspector(snapshot: snapshot),
-            expectedVersion: "7.2.116",
+            expectedVersion: "7.2.120",
             credentialHelperIsExecutable: { _ in true }
         )
     }
 
     /// 构造可定向改写单个契约字段的管理快照。
     private func makeManagementSnapshot(
-        version: String = "7.2.116",
+        version: String = "7.2.120",
         apiKeys: [String] = ["client-key"],
         rawConfiguration: String? = nil
     ) -> CPAManagementSnapshot {

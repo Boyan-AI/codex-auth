@@ -617,7 +617,8 @@ private struct CPAOwnedConfigurationContract: Equatable {
 
 /// 校验应用拥有的本机地址、密钥和 CPA 管理配置契约。
 struct InstalledCPAConfigurationContractChecker: CPAConfigurationContractChecking {
-    static let pinnedVersion = "7.2.116"
+    // 固定到已包含 Codex Responses multi-agent v2 工具兼容修复的 CPA 版本。
+    static let pinnedVersion = "7.2.120"
 
     let inspector: CPAManagementInspecting
     let expectedVersion: String
