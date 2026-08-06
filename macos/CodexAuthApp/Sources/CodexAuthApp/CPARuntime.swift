@@ -753,12 +753,25 @@ protocol CPAServiceRuntimeProtocol {
 
 /// 编排服务生命周期、健康检查、配置契约和系统浏览器入口。
 struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
+    /// launchd 完成拉起后，CPA 端口可能仍在初始化；这些退避间隔覆盖该就绪窗口。
+    static let defaultStartupRetryDelaysNanoseconds: [UInt64] = [
+        100_000_000,
+        250_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000,
+        4_000_000_000,
+        8_000_000_000,
+    ]
+
     let serviceController: CPAServiceControlling
     let configurationProvider: CPAConfigurationProviding
     let healthChecker: CPAHealthChecking
     let contractChecker: CPAConfigurationContractChecking
     let browser: CPABrowserOpening
     let clipboard: CPAClipboardWriting
+    let startupRetryDelaysNanoseconds: [UInt64]
+    let sleep: (UInt64) async -> Void
 
     init(
         serviceController: CPAServiceControlling = LaunchAgentCPAServiceController(),
@@ -766,7 +779,11 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         healthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
         contractChecker: CPAConfigurationContractChecking = InstalledCPAConfigurationContractChecker(),
         browser: CPABrowserOpening = SystemCPABrowser(),
-        clipboard: CPAClipboardWriting = SystemCPAClipboard()
+        clipboard: CPAClipboardWriting = SystemCPAClipboard(),
+        startupRetryDelaysNanoseconds: [UInt64] = CPAServiceRuntime.defaultStartupRetryDelaysNanoseconds,
+        sleep: @escaping (UInt64) async -> Void = { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
     ) {
         self.serviceController = serviceController
         self.configurationProvider = configurationProvider
@@ -774,15 +791,31 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         self.contractChecker = contractChecker
         self.browser = browser
         self.clipboard = clipboard
+        self.startupRetryDelaysNanoseconds = startupRetryDelaysNanoseconds
+        self.sleep = sleep
     }
 
     /// 启动服务后先锁定配置契约，再用客户端 Key 检查模型端点；回滚由 AppState 编排。
     func startAndValidate() async throws -> CPAConfiguration {
         try await serviceController.start()
         let configuration = try configurationProvider.load()
-        try await contractChecker.validate(configuration)
-        try await healthChecker.validate(configuration)
+        try await validateStartupReadiness(configuration)
         return configuration
+    }
+
+    /// 在 CPA 端口尚未就绪时短暂重试；配置不兼容等确定性错误立即返回。
+    private func validateStartupReadiness(_ configuration: CPAConfiguration) async throws {
+        var remainingDelays = startupRetryDelaysNanoseconds
+        while true {
+            do {
+                try await contractChecker.validate(configuration)
+                try await healthChecker.validate(configuration)
+                return
+            } catch let error as CPARuntimeError {
+                guard case .unavailable = error, !remainingDelays.isEmpty else { throw error }
+                await sleep(remainingDelays.removeFirst())
+            }
+        }
     }
 
     /// 明确关闭用户级 CPA 服务。

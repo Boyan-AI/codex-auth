@@ -314,7 +314,9 @@ final class CPARuntimeTests: XCTestCase {
             configurationProvider: FixedCPAConfigurationProvider(configuration: try! makeConfiguration()),
             healthChecker: FailingCPAHealthChecker(),
             contractChecker: AcceptingCPAContractChecker(),
-            browser: RecordingCPABrowser()
+            browser: RecordingCPABrowser(),
+            startupRetryDelaysNanoseconds: [],
+            sleep: { _ in }
         )
 
         do {
@@ -323,6 +325,26 @@ final class CPARuntimeTests: XCTestCase {
         } catch {
             XCTAssertEqual(service.calls, ["start"])
         }
+    }
+
+    /// 验证 CPA 首次端口连接失败时会等待就绪，而不是立即触发全局路由回滚。
+    func testRuntimeRetriesUnavailableStartupUntilCPAIsReady() async throws {
+        let healthChecker = EventuallySuccessfulCPAHealthChecker(failuresBeforeSuccess: 2)
+        var delays: [UInt64] = []
+        let runtime = CPAServiceRuntime(
+            serviceController: StubCPAServiceController(),
+            configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
+            healthChecker: healthChecker,
+            contractChecker: AcceptingCPAContractChecker(),
+            browser: RecordingCPABrowser(),
+            startupRetryDelaysNanoseconds: [0, 0],
+            sleep: { delays.append($0) }
+        )
+
+        _ = try await runtime.startAndValidate()
+
+        XCTAssertEqual(healthChecker.attempts, 3)
+        XCTAssertEqual(delays, [0, 0])
     }
 
     /// 验证启动时先锁定固定服务契约，再发送客户端 Key 做模型健康检查。
@@ -577,6 +599,23 @@ private struct SuccessfulCPAHealthChecker: CPAHealthChecking {
 private struct FailingCPAHealthChecker: CPAHealthChecking {
     func validate(_ configuration: CPAConfiguration) async throws {
         throw CPARuntimeError.unavailable("test")
+    }
+}
+
+/// 前几次模拟端口拒绝连接，随后返回健康，用于覆盖启动就绪竞态。
+private final class EventuallySuccessfulCPAHealthChecker: CPAHealthChecking {
+    private let failuresBeforeSuccess: Int
+    private(set) var attempts = 0
+
+    init(failuresBeforeSuccess: Int) {
+        self.failuresBeforeSuccess = failuresBeforeSuccess
+    }
+
+    func validate(_ configuration: CPAConfiguration) async throws {
+        attempts += 1
+        if attempts <= failuresBeforeSuccess {
+            throw CPARuntimeError.unavailable("not ready")
+        }
     }
 }
 
