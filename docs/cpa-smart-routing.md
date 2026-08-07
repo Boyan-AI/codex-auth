@@ -92,6 +92,18 @@ On app launch, the persisted `global_route` is reconciled with launchd and the i
 
 The native panel opens in the system browser at `http://127.0.0.1:8317/management.html` only after the service and runtime contract are healthy. The Management Key is never placed in the URL. The menu and routing page expose a separate explicit copy action so the user can authenticate in the panel.
 
+Codex Auth installs CPA Manager Plus `1.11.11-codex-auth.1`, based on upstream `v1.11.11`, from the dedicated fork tag [`codex-auth-ui-v1.11.11.1`](https://github.com/Boyan-AI/CPA-Manager-Plus/releases/tag/codex-auth-ui-v1.11.11.1). The installer pins the versioned Darwin arm64 asset and verifies SHA-256 `b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795` before replacing the managed binary.
+
+This CPAMP build changes only log presentation:
+
+- the filter and action area does not have an independent vertical scrollbar;
+- log rows show concise status, time, semantic summary, and duration by default;
+- complete methods, paths, client addresses, source locations, request IDs, and raw-log actions remain available in expanded details;
+- management traffic is hidden by default with a visible buffered-entry count and can be shown temporarily;
+- a management request failure is identified separately and does not imply that a model request failed.
+
+These presentation rules do not change CPA routing, proxy or TUN behavior, upstream requests, status codes, or raw log content.
+
 CPA's primary repository documents its configuration and management API:
 
 - [CLIProxyAPI example configuration](https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml)

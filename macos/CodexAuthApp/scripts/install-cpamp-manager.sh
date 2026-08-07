@@ -3,9 +3,12 @@
 set -euo pipefail
 umask 077
 
-readonly VERSION="1.11.11"
-readonly ARCHIVE_SHA256="fafe1665dd0a6f67a7e9bd33064b8d12fc335f5ac9f3c4e3506e2c2f2454753b"
-readonly ARCHIVE_URL="https://github.com/seakee/CPA-Manager-Plus/releases/download/v${VERSION}/cpa-manager-plus_v${VERSION}_darwin_arm64.tar.gz"
+# 固定到 Codex Auth 专用 fork release；写入运行目录前必须通过 SHA-256 校验。
+readonly VERSION="1.11.11-codex-auth.1"
+readonly RELEASE_TAG="codex-auth-ui-v1.11.11.1"
+readonly ARCHIVE_NAME="cpa-manager-plus_${VERSION}_darwin_arm64.tar.gz"
+readonly ARCHIVE_SHA256="b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795"
+readonly ARCHIVE_URL="https://github.com/Boyan-AI/CPA-Manager-Plus/releases/download/${RELEASE_TAG}/${ARCHIVE_NAME}"
 readonly LABEL="com.codex-auth.cpamp"
 readonly USER_HOME="${HOME:?HOME is required}"
 readonly USER_DOMAIN="gui/${UID}"
@@ -110,7 +113,7 @@ write_config
 "${CURL_BIN}" --fail --silent --show-error --location --output "${ARCHIVE_PATH}" "${ARCHIVE_URL}"
 [[ "$(file_sha256 "${ARCHIVE_PATH}")" == "${ARCHIVE_SHA256}" ]] || fail 65 "CPAMP archive checksum mismatch."
 /usr/bin/tar -xzf "${ARCHIVE_PATH}" -C "${TEMP_DIR}"
-readonly EXTRACTED_BINARY="${TEMP_DIR}/cpa-manager-plus_v${VERSION}_darwin_arm64/cpa-manager-plus"
+readonly EXTRACTED_BINARY="${TEMP_DIR}/cpa-manager-plus_${VERSION}_darwin_arm64/cpa-manager-plus"
 [[ -x "${EXTRACTED_BINARY}" ]] || fail 65 "CPAMP binary is missing from the release archive."
 
 "${LAUNCHCTL_BIN}" bootout "$(service_target)" >/dev/null 2>&1 || true
@@ -121,5 +124,5 @@ write_launch_agent
     "${LAUNCHCTL_BIN}" print "$(service_target)" >/dev/null
 "${LAUNCHCTL_BIN}" kickstart -k "$(service_target)"
 wait_for_health
-echo "CPAMP Manager Plus v${VERSION} is installed and healthy at http://127.0.0.1:18317."
+echo "CPAMP Manager Plus ${VERSION} is installed and healthy at http://127.0.0.1:18317."
 echo "Admin key file: ${ADMIN_KEY_PATH}"

@@ -1,12 +1,12 @@
 # CPAMP 日志页可读性改版设计
 
-状态：已完成视觉方向确认，待用户审阅书面设计
+状态：已实现并完成发布制品验证，待真实安装与页面验收
 
 日期：2026-08-07
 
 ## 背景与证据
 
-当前桌面 App 通过 CPAMP Manager Plus 提供管理页。Codex Auth 固定安装 CPAMP `v1.11.11`，管理页由 CPAMP 二进制内置的 Web 前端提供，地址为 `http://127.0.0.1:18317/management.html`。
+当前桌面 App 通过 CPAMP Manager Plus 提供管理页。改版基于上游 CPAMP `v1.11.11`，Codex Auth 将固定安装专用构建 `1.11.11-codex-auth.1`；管理页由 CPAMP 二进制内置的 Web 前端提供，地址为 `http://127.0.0.1:18317/management.html`。
 
 截图和源码核对得到三个明确问题：
 
@@ -119,6 +119,18 @@ CPAMP 已有“请求监控”页承担统计和业务分析职责；本设计�
 因此正式实现应在 CPAMP 源码（上游或维护中的 fork）完成并生成新版本，再在 Codex Auth 中更新 CPAMP 版本与校验值。禁止在安装后直接修改二进制或向管理页注入脚本；这种方式不可复现、无法通过完整性校验，也会在下一次安装时丢失。
 
 若没有可发布的 CPAMP fork/release 权限，本次可以先完成 CPAMP 侧补丁、测试和构建验证，但不能宣称 Codex Auth 的桌面安装包已经包含该 UI 变更。
+
+## 实现与发布结果
+
+- CPAMP 源码分支：`Boyan-AI/CPA-Manager-Plus` 的 `codex-auth/logs-readable`。
+- 固定 tag：`codex-auth-ui-v1.11.11.1`，指向提交 `16089ba7e6181503f6e911964674c57942ab66aa`。
+- 发布页：`https://github.com/Boyan-AI/CPA-Manager-Plus/releases/tag/codex-auth-ui-v1.11.11.1`。
+- Darwin arm64 资产：`cpa-manager-plus_1.11.11-codex-auth.1_darwin_arm64.tar.gz`。
+- SHA-256：`b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795`。
+- 发布前完整前端验证为 138 个测试文件、1377 个测试全部通过；TypeScript、ESLint、生产构建、Go 测试和六平台原生打包通过。
+- 发布后重新下载的 Darwin arm64 资产与本地验证制品逐字节一致，GitHub API digest 与安装器固定校验值一致。
+
+该发布未冒充上游正式版本，也不使用可覆盖的 latest URL。fork 当前未开启 GitHub immutable release 保护，因此 Codex Auth 仍以专用 tag、版本化资产 URL 和安装前 SHA-256 校验共同建立完整性边界；任何远端资产替换都会在替换托管二进制前失败。
 
 ## 错误处理与兼容性
 
