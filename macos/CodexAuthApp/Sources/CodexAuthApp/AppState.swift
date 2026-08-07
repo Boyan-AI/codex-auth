@@ -87,8 +87,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 菜单每次打开都请求全量刷新；进行中的全量请求由协调器合并。
+    /// 菜单每次打开都请求全量刷新；CPA 路由写入期间跳过，避免并发 CLI 覆盖注册表。
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
+        guard !isCPAOperationInProgress else { return }
         await requestRefresh(.full, apiMode: apiMode)
     }
 
@@ -112,11 +113,13 @@ final class AppState: ObservableObject {
     }
 
     func refreshOnPeriodicTimer(apiMode: CodexAuthAPIMode = .automatic) async {
+        guard !isCPAOperationInProgress else { return }
         await requestRefresh(.quota, apiMode: apiMode)
     }
 
-    /// 手动额度刷新也进入同一写入队列，避免与菜单全量结果交叉覆盖。
+    /// 手动额度刷新也进入同一写入队列；CPA 路由写入期间留待下次刷新。
     func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
+        guard !isCPAOperationInProgress else { return }
         await requestRefresh(.quota, apiMode: apiMode)
     }
 
@@ -223,6 +226,8 @@ final class AppState: ObservableObject {
         guard !isCPAOperationInProgress, !isAccountSwitchInProgress else { return }
         isCPAOperationInProgress = true
         defer { isCPAOperationInProgress = false }
+        let activeRefresh = refreshLoopTask
+        await activeRefresh?.value
         if enabled {
             await enableCPA(showSuccessNotice: true)
         } else {

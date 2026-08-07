@@ -32,24 +32,28 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
 
-    /// 验证关闭 CPA 完成后，菜单打开时启动的旧刷新不能恢复过期的 CPA 路由。
-    func testStaleMenuRefreshCannotRestoreCPARouteAfterDisable() async {
-        let client = StubCodexAuthClient(state: makeState(route: .cpa))
-        let runtime = StubCPAServiceRuntime(status: .running)
+    /// 验证 CPA 路由操作等待菜单刷新结束，避免两个 CLI 进程并发写回注册表。
+    func testCPAOperationWaitsForMenuRefreshBeforeChangingRoute() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .cpa), operations: operations)
+        let runtime = StubCPAServiceRuntime(operations: operations, status: .running)
         let appState = AppState(client: client, cpaRuntime: runtime)
         await appState.refresh()
         let refreshGate = AsyncOperationGate()
         client.refreshGate = refreshGate
 
-        let staleRefresh = Task { await appState.refreshOnMenuOpen() }
+        let menuRefresh = Task { await appState.refreshOnMenuOpen() }
         await refreshGate.waitUntilSuspended()
-        await appState.setCPAEnabled(false)
-        XCTAssertFalse(appState.isCPAEnabled)
-        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+        let disable = Task { await appState.setCPAEnabled(false) }
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertEqual(operations.values, ["refresh"])
 
         await refreshGate.resume()
-        await staleRefresh.value
+        await menuRefresh.value
+        await disable.value
 
+        XCTAssertEqual(operations.values, ["refresh", "route-disable", "service-stop"])
         XCTAssertFalse(appState.isCPAEnabled)
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
