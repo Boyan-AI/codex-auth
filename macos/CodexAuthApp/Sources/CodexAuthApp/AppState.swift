@@ -267,13 +267,13 @@ final class AppState: ObservableObject {
                 baseURL: configuration.baseURL.absoluteString,
                 clientConfigurationPath: configuration.clientConfigurationURL.path
             )
-            await acceptState(updatedState)
+            await acceptAuthoritativeRouteState(updatedState)
             cpaServiceStatus = .running
             if showSuccessNotice { notice = "CPA 已开启。新建 Codex 会话将全局使用 CPA。" }
         } catch let enableError {
             do {
                 let directState = try await client.disableCPARoute()
-                await acceptState(directState)
+                await acceptAuthoritativeRouteState(directState)
             } catch let rollbackError {
                 cpaServiceStatus = await cpaRuntime.status()
                 errorMessage = "CPA 开启失败，恢复直连失败；CPA 服务保持运行：\(enableError.localizedDescription)；\(rollbackError.localizedDescription)"
@@ -300,7 +300,7 @@ final class AppState: ObservableObject {
         errorMessage = nil
         do {
             let directState = try await client.disableCPARoute()
-            await acceptState(directState)
+            await acceptAuthoritativeRouteState(directState)
         } catch {
             cpaServiceStatus = await cpaRuntime.status()
             errorMessage = error.localizedDescription
@@ -448,5 +448,12 @@ final class AppState: ObservableObject {
     private func acceptState(_ loadedState: CodexAuthState) async {
         state = loadedState
         presentUsageAlerts(for: loadedState)
+    }
+
+    /// 提交 CPA 路由命令返回的权威状态，并让所有更早启动的刷新结果失效。
+    private func acceptAuthoritativeRouteState(_ loadedState: CodexAuthState) async {
+        loadSequence += 1
+        isLoading = false
+        await acceptState(loadedState)
     }
 }

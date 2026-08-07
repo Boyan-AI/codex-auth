@@ -32,6 +32,48 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
 
+    /// 验证关闭 CPA 完成后，菜单打开时启动的旧刷新不能恢复过期的 CPA 路由。
+    func testStaleMenuRefreshCannotRestoreCPARouteAfterDisable() async {
+        let client = StubCodexAuthClient(state: makeState(route: .cpa))
+        let runtime = StubCPAServiceRuntime(status: .running)
+        let appState = AppState(client: client, cpaRuntime: runtime)
+        await appState.refresh()
+        let refreshGate = AsyncOperationGate()
+        client.refreshGate = refreshGate
+
+        let staleRefresh = Task { await appState.refreshOnMenuOpen() }
+        await refreshGate.waitUntilSuspended()
+        await appState.setCPAEnabled(false)
+        XCTAssertFalse(appState.isCPAEnabled)
+        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+
+        await refreshGate.resume()
+        await staleRefresh.value
+
+        XCTAssertFalse(appState.isCPAEnabled)
+        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+    }
+
+    /// 验证权威 CPA 路由淘汰普通状态读取后仍会结束加载状态。
+    func testAuthoritativeCPARouteClearsInvalidatedStateLoad() async {
+        let client = StubCodexAuthClient(state: makeState(route: .cpa))
+        let runtime = StubCPAServiceRuntime(status: .running)
+        let appState = AppState(client: client, cpaRuntime: runtime)
+        await appState.refresh()
+        let loadStateGate = AsyncOperationGate()
+        client.loadStateGate = loadStateGate
+
+        let staleLoad = Task { await appState.refresh() }
+        await loadStateGate.waitUntilSuspended()
+        await appState.setCPAEnabled(false)
+        await loadStateGate.resume()
+        await staleLoad.value
+
+        XCTAssertFalse(appState.isLoading)
+        XCTAssertFalse(appState.isCPAEnabled)
+        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+    }
+
     /// 验证服务校验失败时恢复直连并停服。
     func testEnableCPAFailureRollsBackRouteAndService() async {
         let operations = OperationRecorder()
@@ -278,6 +320,8 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var enableError: Error?
     var disableError: Error?
     var switchGate: AsyncOperationGate?
+    var refreshGate: AsyncOperationGate?
+    var loadStateGate: AsyncOperationGate?
     var refreshCallCount = 0
 
     init(state: CodexAuthState, operations: OperationRecorder? = nil) {
@@ -285,12 +329,20 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
         self.operations = operations
     }
 
-    func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState { state }
+    /// 返回状态读取开始时的快照，并允许测试暂停结果以复现旧请求晚到。
+    func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
+        let snapshot = state
+        if let loadStateGate { await loadStateGate.suspend() }
+        return snapshot
+    }
 
+    /// 返回刷新开始时捕获的快照，并允许测试暂停结果以复现旧请求晚到。
     func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
         refreshCallCount += 1
         operations?.values.append("refresh")
-        return state
+        let snapshot = state
+        if let refreshGate { await refreshGate.suspend() }
+        return snapshot
     }
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {
