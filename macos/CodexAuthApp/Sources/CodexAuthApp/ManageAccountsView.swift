@@ -29,7 +29,7 @@ struct ManageAccountsView: View {
     @State private var selectedSortOrder: AccountSortOrder = .added
     @State private var selectedAccountID: CodexAccount.ID?
     @State private var isAddingAccount = false
-    @State private var reloginAccount: CodexAccount?
+    @State private var reconnectAction: ConnectionReconnectAction?
     @State private var deleteAccount: CodexAccount?
 
     /// 允许菜单中的“添加账号”入口直接打开账号页 sheet。
@@ -65,7 +65,7 @@ struct ManageAccountsView: View {
                 } else if let account = selectedAccount ?? filteredAccounts.first {
                     AccountDetailView(
                         account: account,
-                        onRelogin: { reloginAccount = account },
+                        onReconnect: { reconnectAction = ConnectionReconnectAction(account: account) },
                         onDelete: { deleteAccount = account }
                     )
                 } else {
@@ -80,9 +80,14 @@ struct ManageAccountsView: View {
         .sheet(isPresented: $isAddingAccount) {
             AddConnectionSheet()
         }
-        .sheet(item: $reloginAccount) { account in
-            AccountLoginSheet(title: "重新登录", initialAlias: account.alias ?? "") { alias in
-                Task { await appState.login(alias: alias) }
+        .sheet(item: $reconnectAction) { action in
+            switch action {
+            case .account(let account):
+                AccountLoginSheet(title: "重新登录", initialAlias: account.alias ?? "") { alias in
+                    Task { await appState.login(alias: alias) }
+                }
+            case .apiKey(let account):
+                AddConnectionSheet(configuration: .readdingAPIKey(for: account))
             }
         }
         .sheet(item: $deleteAccount) { account in
@@ -319,9 +324,16 @@ private struct DeletedConnectionDetailView: View {
 private struct AddConnectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appState: AppState
+    let configuration: ConnectionFormConfiguration
+
+    /// 默认保持统一添加入口；重新添加 Key 时由调用方传入 Key-only 配置。
+    init(configuration: ConnectionFormConfiguration = .adding) {
+        self.configuration = configuration
+    }
 
     var body: some View {
         AddConnectionForm(
+            configuration: configuration,
             onCancel: { dismiss() },
             onAccount: { alias in
                 dismiss()
@@ -337,29 +349,50 @@ private struct AddConnectionSheet: View {
 
 /// 为管理页 sheet 和独立添加窗口提供一致的连接类型表单。
 struct AddConnectionForm: View {
+    let configuration: ConnectionFormConfiguration
     let onCancel: () -> Void
     let onAccount: (String?) -> Void
     let onAPIKey: (String, APIKeyProvider, String, String) -> Void
-    @State private var connectionType = 0
-    @State private var alias = ""
-    @State private var provider: APIKeyProvider = .openai
-    @State private var baseURL = APIKeyProvider.openai.defaultBaseURL
-    @State private var apiKey = ""
+    @State private var connectionType: ConnectionFormType
+    @State private var alias: String
+    @State private var provider: APIKeyProvider
+    @State private var baseURL: String
+    @State private var apiKey: String
+
+    /// 按配置初始化统一表单；重新添加 Key 时只接收非敏感默认值。
+    init(
+        configuration: ConnectionFormConfiguration = .adding,
+        onCancel: @escaping () -> Void,
+        onAccount: @escaping (String?) -> Void,
+        onAPIKey: @escaping (String, APIKeyProvider, String, String) -> Void
+    ) {
+        self.configuration = configuration
+        self.onCancel = onCancel
+        self.onAccount = onAccount
+        self.onAPIKey = onAPIKey
+        _connectionType = State(initialValue: configuration.initialType)
+        _alias = State(initialValue: configuration.initialAlias)
+        _provider = State(initialValue: configuration.initialProvider)
+        _baseURL = State(initialValue: configuration.initialBaseURL)
+        _apiKey = State(initialValue: configuration.initialAPIKey)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("添加连接")
+            Text(configuration.title)
                 .font(.title2.weight(.semibold))
-            Picker("连接类型", selection: $connectionType) {
-                Text("ChatGPT 账号").tag(0)
-                Text("API Key").tag(1)
+            if configuration.allowsTypeSelection {
+                Picker("连接类型", selection: $connectionType) {
+                    Text("ChatGPT 账号").tag(ConnectionFormType.account)
+                    Text("API Key").tag(ConnectionFormType.apiKey)
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
 
             TextField("名称（可选）", text: $alias)
                 .textFieldStyle(.roundedBorder)
 
-            if connectionType == 1 {
+            if connectionType == .apiKey {
                 Picker("服务商", selection: $provider) {
                     ForEach(APIKeyProvider.allCases) { item in
                         Text(item.title).tag(item)
@@ -379,13 +412,13 @@ struct AddConnectionForm: View {
             HStack {
                 Spacer()
                 Button("取消", action: onCancel)
-                Button(connectionType == 0 ? "继续登录" : "添加 Key") { submit() }
+                Button(connectionType == .account ? "继续登录" : "添加 Key") { submit() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(connectionType == 1 && !isKeyFormValid)
+                    .disabled(connectionType == .apiKey && !isKeyFormValid)
             }
         }
         .padding(24)
-        .frame(width: 460, height: connectionType == 0 ? 220 : 300)
+        .frame(width: 460, height: connectionType == .account ? 220 : 300)
     }
 
     /// 校验 Key 表单的最小必填字段，后端继续负责安全 URL 校验。
@@ -397,7 +430,7 @@ struct AddConnectionForm: View {
     /// 关闭表单后触发对应的异步添加流程。
     private func submit() {
         let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        if connectionType == 0 {
+        if connectionType == .account {
             onAccount(trimmedAlias.isEmpty ? nil : trimmedAlias)
         } else {
             onAPIKey(
@@ -414,7 +447,7 @@ struct AddConnectionForm: View {
 private struct AccountDetailView: View {
     @EnvironmentObject private var appState: AppState
     let account: CodexAccount
-    let onRelogin: () -> Void
+    let onReconnect: () -> Void
     let onDelete: () -> Void
     @State private var aliasText = ""
 
@@ -520,14 +553,14 @@ private struct AccountDetailView: View {
         }
     }
 
-    /// 将重新登录和删除保留为低频 sheet 操作。
+    /// 按连接类型提供重新登录或重新添加 Key，并保留删除操作。
     private var actionFooter: some View {
         HStack {
             Text(account.lastRefreshAt?.formatted(date: .abbreviated, time: .shortened) ?? "尚未刷新")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("重新登录", action: onRelogin)
+            Button(ConnectionReconnectAction(account: account).buttonTitle, action: onReconnect)
             Button("删除", role: .destructive, action: onDelete)
         }
     }
