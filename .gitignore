@@ -28,3 +28,6 @@ benchmark/*
 # Local one-shot desktop delivery state
 .agent/desktop-delivery-ready.json
 .agent/desktop-delivery-ready.tmp
+
+# Local Codex task plans and delivery state
+.agent/
