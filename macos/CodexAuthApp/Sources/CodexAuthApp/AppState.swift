@@ -5,6 +5,7 @@ import Foundation
 private enum AppRefreshWork {
     case full
     case quota
+    case state
 }
 
 @MainActor
@@ -28,10 +29,12 @@ final class AppState: ObservableObject {
     private var usageAlertTracker = UsageAlertTracker()
     private var didRefreshOnAppLaunch = false
     private var periodicRefreshTask: Task<Void, Never>?
+    private var initialTokenRefreshTask: Task<Void, Never>?
     private var refreshLoopTask: Task<Void, Never>?
     private var activeRefreshWork: AppRefreshWork?
     private var pendingFullRefresh = false
     private var pendingQuotaRefresh = false
+    private var pendingStateLoad = false
     private var tokenUsageGeneration = 0
     private var loadSequence = 0
 
@@ -49,6 +52,7 @@ final class AppState: ObservableObject {
 
     deinit {
         periodicRefreshTask?.cancel()
+        initialTokenRefreshTask?.cancel()
         refreshLoopTask?.cancel()
     }
 
@@ -70,27 +74,38 @@ final class AppState: ObservableObject {
         await load { try await client.loadState(apiMode: apiMode) }
     }
 
-    /// 首次启动刷新状态后对账全局路由和用户级服务，失败时降级为直连。
+    /// 首次启动先用本地状态对账路由和服务，再异步扫描只影响展示的 Token 数据。
     func refreshOnAppLaunch(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !didRefreshOnAppLaunch else {
             return
         }
         didRefreshOnAppLaunch = true
         isCPAOperationInProgress = true
-        defer { isCPAOperationInProgress = false }
-        await requestRefresh(.full, apiMode: apiMode)
-        guard let state else { return }
+        await refresh(apiMode: apiMode)
+        guard let state else {
+            isCPAOperationInProgress = false
+            return
+        }
         if state.globalRoute == .cpa {
             await enableCPA(showSuccessNotice: false)
         } else {
             await disableCPA(showSuccessNotice: false)
         }
+        isCPAOperationInProgress = false
+        startInitialTokenRefresh()
     }
 
-    /// 菜单每次打开都请求全量刷新；CPA 路由写入期间跳过，避免并发 CLI 覆盖注册表。
+    /// 后台执行首次全量 Token 扫描，不占用账号刷新与 CPA 路由操作队列。
+    private func startInitialTokenRefresh() {
+        initialTokenRefreshTask = Task { [weak self] in
+            await self?.performTokenRefresh(mode: .full)
+        }
+    }
+
+    /// 菜单打开时只读取本地权威状态；CPA 路由写入期间跳过，避免并发 CLI 覆盖注册表。
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !isCPAOperationInProgress else { return }
-        await requestRefresh(.full, apiMode: apiMode)
+        await requestRefresh(.state, apiMode: apiMode)
     }
 
     func startPeriodicRefresh(
@@ -332,6 +347,10 @@ final class AppState: ObservableObject {
             if activeRefreshWork != .full && activeRefreshWork != .quota && !pendingFullRefresh {
                 pendingQuotaRefresh = true
             }
+        case .state:
+            if activeRefreshWork == nil && !pendingFullRefresh && !pendingQuotaRefresh {
+                pendingStateLoad = true
+            }
         }
 
         if refreshLoopTask == nil {
@@ -355,6 +374,7 @@ final class AppState: ObservableObject {
             if pendingFullRefresh {
                 pendingFullRefresh = false
                 pendingQuotaRefresh = false
+                pendingStateLoad = false
                 activeRefreshWork = .full
                 await performFullRefresh(apiMode: apiMode)
                 activeRefreshWork = nil
@@ -362,12 +382,37 @@ final class AppState: ObservableObject {
             }
             if pendingQuotaRefresh {
                 pendingQuotaRefresh = false
+                pendingStateLoad = false
                 activeRefreshWork = .quota
                 await performQuotaRefresh(apiMode: apiMode)
                 activeRefreshWork = nil
                 continue
             }
+            if pendingStateLoad {
+                pendingStateLoad = false
+                activeRefreshWork = .state
+                await performStateLoad(apiMode: apiMode)
+                activeRefreshWork = nil
+                continue
+            }
             break
+        }
+    }
+
+    /// 读取本地注册表状态，不触发账号联网刷新或完整 Token 扫描。
+    private func performStateLoad(apiMode: CodexAuthAPIMode) async {
+        loadSequence += 1
+        let sequence = loadSequence
+        errorMessage = nil
+        do {
+            let loadedState = try await client.loadState(apiMode: apiMode)
+            if sequence == loadSequence {
+                await acceptState(loadedState)
+            }
+        } catch {
+            if sequence == loadSequence {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

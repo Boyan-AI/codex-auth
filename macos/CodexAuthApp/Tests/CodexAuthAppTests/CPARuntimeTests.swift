@@ -222,7 +222,7 @@ final class CPARuntimeTests: XCTestCase {
         try await URLSessionCPAHealthChecker(session: session).validate(makeConfiguration())
     }
 
-    /// 验证用户级服务按 enable、bootstrap、kickstart 的固定顺序启动。
+    /// 验证用户级 RunAtLoad 服务按 enable、bootstrap 顺序启动。
     func testLaunchAgentStartsInRequiredOrder() async throws {
         let runner = RecordingCPAServiceCommandRunner()
         let controller = makeServiceController(runner: runner)
@@ -232,7 +232,6 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(runner.arguments, [
             ["enable", "gui/501/com.codex-auth.cpa"],
             ["bootstrap", "gui/501", "/tmp/com.codex-auth.cpa.plist"],
-            ["kickstart", "-k", "gui/501/com.codex-auth.cpa"],
         ])
     }
 

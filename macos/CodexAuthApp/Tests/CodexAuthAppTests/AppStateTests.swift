@@ -32,30 +32,41 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
 
-    /// 验证 CPA 路由操作等待菜单刷新结束，避免两个 CLI 进程并发写回注册表。
-    func testCPAOperationWaitsForMenuRefreshBeforeChangingRoute() async {
+    /// 验证菜单本地状态读取结束前，CPA 路由操作不会并发改写注册表。
+    func testCPAOperationWaitsForMenuStateLoadBeforeChangingRoute() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .cpa), operations: operations)
+        client.recordsLoadStateOperation = true
         let runtime = StubCPAServiceRuntime(operations: operations, status: .running)
         let appState = AppState(client: client, cpaRuntime: runtime)
-        await appState.refresh()
-        let refreshGate = AsyncOperationGate()
-        client.refreshGate = refreshGate
+        let stateLoadGate = AsyncOperationGate()
+        client.loadStateGate = stateLoadGate
 
         let menuRefresh = Task { await appState.refreshOnMenuOpen() }
-        await refreshGate.waitUntilSuspended()
+        await stateLoadGate.waitUntilSuspended()
         let disable = Task { await appState.setCPAEnabled(false) }
         for _ in 0..<10 { await Task.yield() }
 
-        XCTAssertEqual(operations.values, ["refresh"])
+        XCTAssertEqual(operations.values, ["state"])
 
-        await refreshGate.resume()
+        await stateLoadGate.resume()
         await menuRefresh.value
         await disable.value
 
-        XCTAssertEqual(operations.values, ["refresh", "route-disable", "service-stop"])
+        XCTAssertEqual(operations.values, ["state", "route-disable", "service-stop"])
         XCTAssertFalse(appState.isCPAEnabled)
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+    }
+
+    /// 验证打开菜单只读取本地状态，不触发账号联网刷新。
+    func testMenuOpenLoadsLocalStateWithoutNetworkRefresh() async {
+        let client = StubCodexAuthClient(state: makeState(route: .direct))
+        let appState = AppState(client: client, cpaRuntime: StubCPAServiceRuntime())
+
+        await appState.refreshOnMenuOpen()
+
+        XCTAssertEqual(client.loadStateCallCount, 1)
+        XCTAssertEqual(client.refreshCallCount, 0)
     }
 
     /// 验证权威 CPA 路由淘汰普通状态读取后仍会结束加载状态。
@@ -132,7 +143,7 @@ final class AppStateTests: XCTestCase {
 
         await appState.refreshOnAppLaunch()
 
-        XCTAssertEqual(operations.values, ["refresh", "service-start", "route-enable"])
+        XCTAssertEqual(operations.values, ["service-start", "route-enable"])
         XCTAssertTrue(appState.isCPAEnabled)
     }
 
@@ -145,7 +156,7 @@ final class AppStateTests: XCTestCase {
 
         await appState.refreshOnAppLaunch()
 
-        XCTAssertEqual(operations.values, ["refresh", "route-disable", "service-stop"])
+        XCTAssertEqual(operations.values, ["route-disable", "service-stop"])
         XCTAssertFalse(appState.isCPAEnabled)
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
@@ -160,7 +171,7 @@ final class AppStateTests: XCTestCase {
 
         await appState.refreshOnAppLaunch()
 
-        XCTAssertEqual(operations.values, ["refresh", "route-disable"])
+        XCTAssertEqual(operations.values, ["route-disable"])
         XCTAssertEqual(appState.cpaServiceStatus, .running)
         XCTAssertTrue(appState.errorMessage?.contains("restore failed") == true)
     }
@@ -176,7 +187,29 @@ final class AppStateTests: XCTestCase {
         await appState.refreshOnAppLaunch()
 
         XCTAssertFalse(appState.isCPAEnabled)
-        XCTAssertEqual(operations.values, ["refresh", "service-start", "route-disable", "service-stop"])
+        XCTAssertEqual(operations.values, ["service-start", "route-disable", "service-stop"])
+    }
+
+    /// 验证启动路由对账不会等待只影响展示的全量 Token 扫描。
+    func testAppLaunchReconcilesRouteBeforeBackgroundTokenScanCompletes() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .cpa), operations: operations)
+        client.recordsTokenUsageOperation = true
+        let tokenUsageGate = AsyncOperationGate()
+        client.tokenUsageGate = tokenUsageGate
+        let runtime = StubCPAServiceRuntime(operations: operations)
+        let appState = AppState(client: client, cpaRuntime: runtime)
+
+        let launchRefresh = Task { await appState.refreshOnAppLaunch() }
+        await tokenUsageGate.waitUntilSuspended()
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertEqual(operations.values, ["service-start", "route-enable", "token-scan"])
+        XCTAssertFalse(appState.isCPAOperationInProgress)
+        XCTAssertTrue(appState.isCPAEnabled)
+
+        await tokenUsageGate.resume()
+        await launchRefresh.value
     }
 
     /// 验证启动对账期间不会接受会反转最终路由的手动操作。
@@ -197,7 +230,7 @@ final class AppStateTests: XCTestCase {
         await startGate.resume()
         await reconciliation.value
 
-        XCTAssertEqual(operations.values, ["refresh", "service-start", "route-enable"])
+        XCTAssertEqual(operations.values, ["service-start", "route-enable"])
         XCTAssertEqual(appState.state?.activeAccountKey, "acct-1")
         XCTAssertTrue(appState.isCPAEnabled)
     }
@@ -298,17 +331,23 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.notice, "已添加 API Key。")
     }
 
-    /// 验证应用启动刷新只执行一次。
+    /// 验证应用启动的本地状态读取和后台 Token 扫描都只执行一次。
     func testAppLaunchRefreshRunsOnlyOnce() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(), operations: operations)
+        let tokenUsageGate = AsyncOperationGate()
+        client.tokenUsageGate = tokenUsageGate
         let runtime = StubCPAServiceRuntime(operations: operations)
         let appState = AppState(client: client, cpaRuntime: runtime)
 
         await appState.refreshOnAppLaunch()
         await appState.refreshOnAppLaunch()
+        await tokenUsageGate.waitUntilSuspended()
 
-        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.loadStateCallCount, 1)
+        XCTAssertEqual(client.refreshCallCount, 0)
+        XCTAssertEqual(client.tokenUsageCallCount, 1)
+        await tokenUsageGate.resume()
     }
 }
 
@@ -326,7 +365,12 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var switchGate: AsyncOperationGate?
     var refreshGate: AsyncOperationGate?
     var loadStateGate: AsyncOperationGate?
+    var tokenUsageGate: AsyncOperationGate?
+    var recordsLoadStateOperation = false
+    var recordsTokenUsageOperation = false
+    var loadStateCallCount = 0
     var refreshCallCount = 0
+    var tokenUsageCallCount = 0
 
     init(state: CodexAuthState, operations: OperationRecorder? = nil) {
         self.state = state
@@ -335,6 +379,8 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
 
     /// 返回状态读取开始时的快照，并允许测试暂停结果以复现旧请求晚到。
     func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
+        loadStateCallCount += 1
+        if recordsLoadStateOperation { operations?.values.append("state") }
         let snapshot = state
         if let loadStateGate { await loadStateGate.suspend() }
         return snapshot
@@ -347,6 +393,14 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
         let snapshot = state
         if let refreshGate { await refreshGate.suspend() }
         return snapshot
+    }
+
+    /// 记录全量 Token 扫描并允许测试暂停，模拟大日志目录的慢扫描。
+    func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
+        tokenUsageCallCount += 1
+        if recordsTokenUsageOperation { operations?.values.append("token-scan") }
+        if let tokenUsageGate { await tokenUsageGate.suspend() }
+        throw CodexAuthCLIError.commandFailed("token scan unavailable in test")
     }
 
     func switchAccount(accountKey: String) async throws -> CodexAuthState {

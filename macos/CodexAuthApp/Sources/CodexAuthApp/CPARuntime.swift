@@ -728,7 +728,7 @@ struct LaunchAgentCPAServiceController: CPAServiceControlling {
         self.fileExists = fileExists
     }
 
-    /// 按 enable、bootstrap、kickstart 顺序启动服务，并核实 bootstrap 的已加载返回值。
+    /// 通过 enable、bootstrap 加载并启动 RunAtLoad 服务，避免重复 kickstart 带来的固定等待。
     func start() async throws {
         guard fileExists(launchAgentURL) else { throw CPARuntimeError.missingLaunchAgent }
         try await requireSuccess(["enable", serviceTarget])
@@ -738,7 +738,6 @@ struct LaunchAgentCPAServiceController: CPAServiceControlling {
         } else if bootstrap.exitCode != 0 {
             throw serviceError(bootstrap)
         }
-        try await requireSuccess(["kickstart", "-k", serviceTarget])
     }
 
     /// 先移出服务再禁用自动启动；服务未加载时仍继续执行 disable。
