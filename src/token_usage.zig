@@ -1,5 +1,6 @@
 const std = @import("std");
 const app_runtime = @import("core/runtime.zig");
+const builtin = @import("builtin");
 const compat_fs = @import("core/compat_fs.zig");
 const registry = @import("registry/root.zig");
 const c_time = @cImport({
@@ -8,7 +9,7 @@ const c_time = @cImport({
 
 const max_rollout_bytes: usize = 64 * 1024 * 1024;
 const max_cache_bytes: usize = 16 * 1024 * 1024;
-const cache_schema_version: u32 = 1;
+const cache_schema_version: u32 = 2;
 
 const ScanMode = enum { incremental, full };
 
@@ -135,7 +136,7 @@ pub const Report = struct {
     }
 };
 
-/// 输出 GUI 使用的稳定 JSON；事件日期与“今日”统一使用 UTC 自然日。
+/// 输出 GUI 使用的稳定 JSON；事件日期与“今日”统一使用运行机器的本地自然日。
 pub fn writeJson(report: *Report, out: *std.Io.Writer) !void {
     std.sort.insertion(DayUsage, report.days.items, {}, struct {
         fn lessThan(_: void, left: DayUsage, right: DayUsage) bool {
@@ -143,10 +144,10 @@ pub fn writeJson(report: *Report, out: *std.Io.Writer) !void {
         }
     }.lessThan);
 
-    try out.writeAll("{\"timezone\":\"UTC\",\"summary\":");
+    try out.writeAll("{\"timezone\":\"local\",\"summary\":");
     try writeTotals(out, report.totals);
     try out.print(",\"today\":", .{});
-    if (currentUtcDate()) |today| {
+    if (currentLocalDate()) |today| {
         var found = false;
         for (report.days.items) |day| {
             if (std.mem.eql(u8, day.date, today[0..])) {
@@ -179,19 +180,38 @@ pub fn writeJson(report: *Report, out: *std.Io.Writer) !void {
     });
 }
 
-/// 返回当前 UTC 日期；与 rollout 时间戳的日期字段保持同一口径。
-fn currentUtcDate() ?[10]u8 {
+/// 返回当前本地日期；与 rollout 事件的本地日期转换保持同一口径。
+fn currentLocalDate() ?[10]u8 {
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-    var tm: c_time.struct_tm = undefined;
-    var time_value = std.math.cast(c_time.time_t, now) orelse return null;
-    if (comptime @hasDecl(c_time, "gmtime_r")) {
-        if (c_time.gmtime_r(&time_value, &tm) == null) return null;
-    } else if (comptime @hasDecl(c_time, "gmtime")) {
-        const tm_ptr = c_time.gmtime(&time_value) orelse return null;
-        tm = tm_ptr.*;
-    } else {
-        return null;
+    return localDateFromUnixSeconds(now);
+}
+
+/// 兼容 Windows 与 POSIX libc，把 Unix 秒转换为运行机器的本地日历时间。
+fn localtimeCompat(timestamp: i64, out_tm: *c_time.struct_tm) bool {
+    if (comptime builtin.os.tag == .windows) {
+        if (comptime @hasDecl(c_time, "_localtime64_s") and @hasDecl(c_time, "__time64_t")) {
+            var timestamp_64 = std.math.cast(c_time.__time64_t, timestamp) orelse return false;
+            return c_time._localtime64_s(out_tm, &timestamp_64) == 0;
+        }
+        return false;
     }
+
+    var time_value = std.math.cast(c_time.time_t, timestamp) orelse return false;
+    if (comptime @hasDecl(c_time, "localtime_r")) {
+        return c_time.localtime_r(&time_value, out_tm) != null;
+    }
+    if (comptime @hasDecl(c_time, "localtime")) {
+        const tm_ptr = c_time.localtime(&time_value) orelse return false;
+        out_tm.* = tm_ptr.*;
+        return true;
+    }
+    return false;
+}
+
+/// 将 Unix 秒格式化为本地 `yyyy-MM-dd`，让统计日在本地 00:00 切换。
+fn localDateFromUnixSeconds(timestamp: i64) ?[10]u8 {
+    var tm: c_time.struct_tm = undefined;
+    if (!localtimeCompat(timestamp, &tm)) return null;
     var date: [10]u8 = undefined;
     const year: i32 = @as(i32, tm.tm_year) + 1900;
     const month: i32 = @as(i32, tm.tm_mon) + 1;
@@ -207,6 +227,59 @@ fn currentUtcDate() ?[10]u8 {
     date[8] = @intCast(@divFloor(day, 10) + '0');
     date[9] = @intCast(@mod(day, 10) + '0');
     return date;
+}
+
+/// 解析 Codex rollout 使用的 UTC ISO-8601 时间戳并返回 Unix 秒。
+fn parseUtcTimestampSeconds(value: []const u8) ?i64 {
+    if (value.len < 20) return null;
+    if (value[4] != '-' or value[7] != '-' or value[10] != 'T' or value[13] != ':' or value[16] != ':') return null;
+
+    const year = parseDecimal(value[0..4]) orelse return null;
+    const month = parseDecimal(value[5..7]) orelse return null;
+    const day = parseDecimal(value[8..10]) orelse return null;
+    const hour = parseDecimal(value[11..13]) orelse return null;
+    const minute = parseDecimal(value[14..16]) orelse return null;
+    const second = parseDecimal(value[17..19]) orelse return null;
+    if (month < 1 or month > 12 or day < 1 or day > 31 or hour > 23 or minute > 59 or second > 59) return null;
+
+    var suffix_index: usize = 19;
+    if (value[suffix_index] == '.') {
+        suffix_index += 1;
+        const fraction_start = suffix_index;
+        while (suffix_index < value.len and std.ascii.isDigit(value[suffix_index])) : (suffix_index += 1) {}
+        if (suffix_index == fraction_start) return null;
+    }
+    if (suffix_index >= value.len or value[suffix_index] != 'Z' or suffix_index + 1 != value.len) return null;
+
+    const days = daysFromCivil(year, month, day);
+    return (((days * 24) + hour) * 60 + minute) * 60 + second;
+}
+
+/// 解析只包含十进制数字的时间字段。
+fn parseDecimal(value: []const u8) ?i64 {
+    if (value.len == 0) return null;
+    var result: i64 = 0;
+    for (value) |character| {
+        if (!std.ascii.isDigit(character)) return null;
+        result = result * 10 + (character - '0');
+    }
+    return result;
+}
+
+/// 将公历日期转换为自 Unix epoch 起的天数。
+fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
+    const adjusted_year = year - (if (month <= 2) @as(i64, 1) else 0);
+    const era = @divFloor(if (adjusted_year >= 0) adjusted_year else adjusted_year - 399, 400);
+    const year_of_era = adjusted_year - era * 400;
+    const month_prime = month + (if (month > 2) @as(i64, -3) else 9);
+    const day_of_year = @divFloor(153 * month_prime + 2, 5) + day - 1;
+    const day_of_era = year_of_era * 365 + @divFloor(year_of_era, 4) - @divFloor(year_of_era, 100) + day_of_year;
+    return era * 146097 + day_of_era - 719468;
+}
+
+/// 将 UTC 事件时间转换为本地统计日期。
+fn localDateFromTimestamp(value: []const u8) ?[10]u8 {
+    return localDateFromUnixSeconds(parseUtcTimestampSeconds(value) orelse return null);
 }
 
 fn writeTotals(out: *std.Io.Writer, totals: UsageTotals) !void {
@@ -328,7 +401,7 @@ fn scanFile(allocator: std.mem.Allocator, path: []const u8, size: u64, mtime_ns:
 
     var previous: ?UsageTotals = null;
     var has_usage = false;
-    var touched_days = std.ArrayList([]const u8).empty;
+    var touched_days = std.ArrayList([10]u8).empty;
     defer touched_days.deinit(allocator);
     var line_iter = std.mem.splitScalar(u8, bytes, '\n');
     while (line_iter.next()) |line| {
@@ -354,16 +427,16 @@ fn scanFile(allocator: std.mem.Allocator, path: []const u8, size: u64, mtime_ns:
             file_report.repeated_snapshots += 1;
             continue;
         }
-        const date = if (root.timestamp.len >= 10) root.timestamp[0..10] else continue;
+        const date = localDateFromTimestamp(root.timestamp) orelse continue;
         var is_new_day_for_file = true;
         for (touched_days.items) |touched| {
-            if (std.mem.eql(u8, touched, date)) {
+            if (std.mem.eql(u8, touched[0..], date[0..])) {
                 is_new_day_for_file = false;
                 break;
             }
         }
         if (is_new_day_for_file) try touched_days.append(allocator, date);
-        try addFileDay(allocator, &file_report, date, delta, is_new_day_for_file);
+        try addFileDay(allocator, &file_report, date[0..], delta, is_new_day_for_file);
         file_report.totals.add(delta);
         has_usage = true;
     }

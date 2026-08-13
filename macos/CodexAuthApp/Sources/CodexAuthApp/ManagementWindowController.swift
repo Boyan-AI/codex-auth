@@ -293,7 +293,7 @@ private struct UsageManagementView: View {
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button("刷新") {
-                    Task { await appState.refreshOnMenuOpen() }
+                    Task { await appState.refreshUsage() }
                 }
             }
             TokenUsageView(info: appState.tokenUsage)

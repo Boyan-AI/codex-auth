@@ -123,14 +123,15 @@ Token totals use a separate per-rollout contribution cache. Incremental scans re
 file only when its path, size, and nanosecond modification time still match. Full
 scans ignore existing entries and rewrite the cache. The cache contains aggregate
 counts only, is stored with private permissions, and can be deleted safely because a
-later scan rebuilds it from rollout files.
+later scan rebuilds it from rollout files. Event timestamps are converted from UTC to
+the running machine's local calendar date, so daily totals roll over at local 00:00.
 
 ## Desktop Refresh Coordination
 
-- App launch and each menu opening request a full quota, reset-credit, and Token refresh.
-- Repeated full requests are coalesced by one in-process writer.
-- Periodic refresh updates quota data without rescanning every Token file.
-- Incremental Token requests arriving during a full scan are collapsed into one follow-up pass.
+- App launch reads local state, reconciles CPA, and then starts one background full Token scan.
+- Opening the menu only reloads local state and does not perform network or Token work.
+- The 60-second timer and manual refresh update quota data and then run an incremental Token scan.
+- An incremental Token scan waits for the launch full scan before accessing the shared cache.
 - Generation and state sequence counters prevent stale async results from replacing newer account or Token state.
 
 CPA does not participate in quota or Token refresh coordination. The desktop app does not read CPA account data or poll CPA request events; Token totals remain derived from local rollout files.

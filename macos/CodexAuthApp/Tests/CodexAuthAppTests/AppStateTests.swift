@@ -67,6 +67,29 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(client.loadStateCallCount, 1)
         XCTAssertEqual(client.refreshCallCount, 0)
+        XCTAssertTrue(client.tokenUsageModes.isEmpty)
+    }
+
+    /// 验证 60 秒周期刷新在更新账号额度后执行增量 Token 扫描。
+    func testPeriodicRefreshUpdatesQuotaAndTokenIncrementally() async {
+        let client = StubCodexAuthClient(state: makeState(route: .direct))
+        let appState = AppState(client: client, cpaRuntime: StubCPAServiceRuntime())
+
+        await appState.refreshOnPeriodicTimer()
+
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.tokenUsageModes, [.incremental])
+    }
+
+    /// 验证用户手动刷新同时更新账号额度和本地 Token 增量。
+    func testManualUsageRefreshUpdatesQuotaAndTokenIncrementally() async {
+        let client = StubCodexAuthClient(state: makeState(route: .direct))
+        let appState = AppState(client: client, cpaRuntime: StubCPAServiceRuntime())
+
+        await appState.refreshUsage()
+
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.tokenUsageModes, [.incremental])
     }
 
     /// 验证权威 CPA 路由淘汰普通状态读取后仍会结束加载状态。
@@ -371,6 +394,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var loadStateCallCount = 0
     var refreshCallCount = 0
     var tokenUsageCallCount = 0
+    var tokenUsageModes: [TokenUsageScanMode] = []
 
     init(state: CodexAuthState, operations: OperationRecorder? = nil) {
         self.state = state
@@ -398,6 +422,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     /// 记录全量 Token 扫描并允许测试暂停，模拟大日志目录的慢扫描。
     func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo {
         tokenUsageCallCount += 1
+        tokenUsageModes.append(mode)
         if recordsTokenUsageOperation { operations?.values.append("token-scan") }
         if let tokenUsageGate { await tokenUsageGate.suspend() }
         throw CodexAuthCLIError.commandFailed("token scan unavailable in test")

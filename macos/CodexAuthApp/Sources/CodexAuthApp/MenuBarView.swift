@@ -80,7 +80,7 @@ struct MenuBarView: View {
         .frame(minHeight: 32)
     }
 
-    /// 将排序、今日消耗和全量刷新合并为一行高频控制。
+    /// 将排序、今日消耗和额度与 Token 刷新合并为一行高频控制。
     private var accountControls: some View {
         HStack(spacing: 10) {
             Text(appState.isCPAEnabled ? "关闭 CPA 后使用" : "当前直连账号")
@@ -108,13 +108,13 @@ struct MenuBarView: View {
             }
 
             Button {
-                Task { await appState.refreshOnMenuOpen() }
+                Task { await appState.refreshUsage() }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("全量刷新")
+            .help("刷新额度与 Token")
         }
     }
 

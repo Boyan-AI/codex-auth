@@ -74,7 +74,8 @@ struct TokenUsageView: View {
             return today.totals.totalTokens
         }
 
-        let calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         return info.days.reduce(0) { total, day in
             guard let date = parseDate(day.date) else { return total }
             let matches: Bool

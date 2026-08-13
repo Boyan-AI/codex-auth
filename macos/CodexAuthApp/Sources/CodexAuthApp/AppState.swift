@@ -132,7 +132,7 @@ final class AppState: ObservableObject {
         await requestRefresh(.quota, apiMode: apiMode)
     }
 
-    /// 手动额度刷新也进入同一写入队列；CPA 路由写入期间留待下次刷新。
+    /// 手动刷新额度与 Token；CPA 路由写入期间留待下次刷新。
     func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !isCPAOperationInProgress else { return }
         await requestRefresh(.quota, apiMode: apiMode)
@@ -434,7 +434,7 @@ final class AppState: ObservableObject {
         await performTokenRefresh(mode: .full)
     }
 
-    /// 仅刷新权威额度数据，并沿用序列号保护账号切换结果。
+    /// 刷新权威额度后执行增量 Token 扫描，并沿用序列号保护账号切换结果。
     private func performQuotaRefresh(apiMode: CodexAuthAPIMode) async {
         loadSequence += 1
         let sequence = loadSequence
@@ -449,6 +449,13 @@ final class AppState: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+        await performIncrementalTokenRefresh()
+    }
+
+    /// 等待启动全量扫描结束后再增量扫描，避免两个 CLI 进程并发改写 Token 缓存。
+    private func performIncrementalTokenRefresh() async {
+        await initialTokenRefreshTask?.value
+        await performTokenRefresh(mode: .incremental)
     }
 
     /// 仅接受最新一代 Token 扫描结果，失败时保留上一次成功值。
