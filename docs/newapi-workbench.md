@@ -1,0 +1,70 @@
+# NewAPI Local Workbench
+
+This document defines the local macOS workbench that combines Codex Auth, NewAPI, and CLIProxyAPI (CPA).
+
+## Architecture
+
+- Codex Auth is the menu bar controller and keeps one fallback direct ChatGPT account or API Key selected.
+- NewAPI is the unified API exit. It owns channels, users, distributed Tokens, quotas, and routing policy through its native web UI.
+- CPA is one optional NewAPI upstream. It converts subscription accounts and OAuth sessions into an OpenAI-compatible local API.
+- CPA Manager Plus (CPAMP) is the local CPA management page service. Codex Auth starts it only when the CPA management page is opened and stops it with the other managed services.
+- Codex Auth does not copy or reconcile NewAPI users/channels or CPA accounts. Each service keeps its own data boundary.
+
+New Codex processes use one of these routes:
+
+- `direct`: the selected Codex Auth account or direct API Key.
+- `newapi`: `http://127.0.0.1:3000/v1` through the `codex_auth_newapi` provider.
+- `cpa`: the legacy `codex_auth_cpa` provider, retained for registry and CLI compatibility but no longer exposed as the desktop product mode.
+
+## Runtime And Data
+
+The managed NewAPI runtime is pinned to `v1.0.0-rc.25` and uses the official macOS binary with SHA-256 `c287e317f5bbd8112e24af40523525a330a933047082e61308a1b8603d7e485e`.
+
+The upstream macOS asset reports `v0.0.0` from `--version` and the public status endpoint because its release build lacks stamped version metadata. The fixed official SHA-256 is therefore the authoritative asset identity; Codex Auth records the managed contract version as `v1.0.0-rc.25`.
+
+- Runtime root: `~/Library/Application Support/Codex Auth/NewAPI`
+- SQLite database: `data/new-api.db`
+- Client configuration: `client.json`, mode `0600`
+- Server configuration: `server.json`, mode `0600`
+- Credential helper: `bin/codex-auth-newapi-credential`
+- Service: `~/Library/LaunchAgents/com.codex-auth.newapi.plist`
+- Management page: `http://127.0.0.1:3000`
+- Codex API Base URL: `http://127.0.0.1:3000/v1`
+
+NewAPI's official native server listens on port `3000` without a loopback-only binding option in this supported contract. Other devices on the same LAN may therefore reach the port when macOS firewall and network policy permit it. This workbench does not configure public Internet access, TLS, a domain, or a reverse proxy.
+
+The SQLite database belongs to NewAPI and closes with the NewAPI process. There is no separate database service to stop. Upgrades preserve the database and the client Token; installer-owned runtime files are backed up before replacement.
+
+## First Setup
+
+1. Install the pinned NewAPI runtime with `install-newapi-runtime.sh <newapi-macos-binary>`.
+2. In Codex Auth, open the routing page or settings and choose **Open NewAPI Management Page**. The app starts NewAPI before opening the page.
+3. Complete NewAPI's native administrator setup.
+4. Create a NewAPI Token in the native UI.
+5. Paste that Token once into Codex Auth settings and save it.
+6. Enable NewAPI from the menu bar.
+
+Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
+
+## Lifecycle
+
+Enable order:
+
+1. Attempt to start and validate CPA. Failure is recorded as a degraded optional upstream and does not block NewAPI.
+2. Start NewAPI and validate its status endpoint, administrator setup, credential helper, and calling Token.
+3. Patch Codex configuration to use `codex_auth_newapi` and persist `global_route = "newapi"`.
+
+Disable and quit order:
+
+1. Restore the selected direct connection.
+2. Stop NewAPI, which also closes SQLite.
+3. Stop the CPA gateway and any on-demand CPAMP management service.
+4. Terminate Codex Auth only after shutdown succeeds.
+
+If direct-route restoration fails, the app remains running and keeps the services alive so Codex is not left pointing at a stopped local endpoint. Close and quit actions require confirmation.
+
+## Menu Modes
+
+Direct mode keeps the account list and the Account, Manage, Statistics, Settings, and Quit actions. It exposes one NewAPI switch.
+
+NewAPI mode hides direct-account operations and shows only NewAPI status, CPA upstream status, both native management-page actions, Disable, and Quit. The collapsed status item displays a readable NewAPI health state rather than a direct-account quota.

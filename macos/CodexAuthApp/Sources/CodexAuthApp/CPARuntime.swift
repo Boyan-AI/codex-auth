@@ -120,6 +120,7 @@ struct CPAConfiguration: Equatable {
 /// 统一用户级 CPA 安装目录和 LaunchAgent 标签。
 enum CPAInstallationPaths {
     static let launchAgentLabel = "com.codex-auth.cpa"
+    static let managerLaunchAgentLabel = "com.codex-auth.cpamp"
 
     /// 返回应用支持目录中的客户端配置文件路径。
     static func clientConfigurationURL(fileManager: FileManager = .default) -> URL {
@@ -133,6 +134,13 @@ enum CPAInstallationPaths {
         fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
             .appendingPathComponent("\(launchAgentLabel).plist")
+    }
+
+    /// 返回 CPAMP 安装器创建的用户级 LaunchAgent 文件路径。
+    static func managerLaunchAgentURL(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(managerLaunchAgentLabel).plist")
     }
 
     /// 返回 CPAMP 安装器写入的管理员密钥文件路径。
@@ -709,22 +717,25 @@ protocol CPAServiceControlling {
     func status() async -> CPAServiceStatus
 }
 
-/// 控制应用安装的用户级 CPA LaunchAgent，应用退出不会停止服务。
+/// 控制应用安装的用户级 CPA 或 CPAMP LaunchAgent。
 struct LaunchAgentCPAServiceController: CPAServiceControlling {
     let runner: CPAServiceCommandRunning
     let userID: uid_t
     let launchAgentURL: URL
+    let serviceLabel: String
     let fileExists: (URL) -> Bool
 
     init(
         runner: CPAServiceCommandRunning = LaunchctlCommandRunner(),
         userID: uid_t = getuid(),
         launchAgentURL: URL = CPAInstallationPaths.launchAgentURL(),
+        serviceLabel: String = CPAInstallationPaths.launchAgentLabel,
         fileExists: @escaping (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) {
         self.runner = runner
         self.userID = userID
         self.launchAgentURL = launchAgentURL
+        self.serviceLabel = serviceLabel
         self.fileExists = fileExists
     }
 
@@ -758,7 +769,7 @@ struct LaunchAgentCPAServiceController: CPAServiceControlling {
     }
 
     private var domainTarget: String { "gui/\(userID)" }
-    private var serviceTarget: String { "\(domainTarget)/\(CPAInstallationPaths.launchAgentLabel)" }
+    private var serviceTarget: String { "\(domainTarget)/\(serviceLabel)" }
 
     /// 要求单个 launchctl 命令成功。
     private func requireSuccess(_ arguments: [String]) async throws {
@@ -817,6 +828,7 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
     ]
 
     let serviceController: CPAServiceControlling
+    let managerServiceController: CPAServiceControlling
     let configurationProvider: CPAConfigurationProviding
     let healthChecker: CPAHealthChecking
     let contractChecker: CPAConfigurationContractChecking
@@ -829,6 +841,10 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
 
     init(
         serviceController: CPAServiceControlling = LaunchAgentCPAServiceController(),
+        managerServiceController: CPAServiceControlling = LaunchAgentCPAServiceController(
+            launchAgentURL: CPAInstallationPaths.managerLaunchAgentURL(),
+            serviceLabel: CPAInstallationPaths.managerLaunchAgentLabel
+        ),
         configurationProvider: CPAConfigurationProviding = InstalledCPAConfigurationProvider(),
         healthChecker: CPAHealthChecking = URLSessionCPAHealthChecker(),
         contractChecker: CPAConfigurationContractChecking = InstalledCPAConfigurationContractChecker(),
@@ -842,6 +858,7 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     ) {
         self.serviceController = serviceController
+        self.managerServiceController = managerServiceController
         self.configurationProvider = configurationProvider
         self.healthChecker = healthChecker
         self.contractChecker = contractChecker
@@ -876,9 +893,20 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     }
 
-    /// 明确关闭用户级 CPA 服务。
+    /// 幂等关闭 CPA 网关和按需启动的 CPAMP 管理服务，并确保两者都会被尝试停止。
     func stop() async throws {
-        try await serviceController.stop()
+        var firstError: Error?
+        do {
+            try await stopControllerIfNeeded(serviceController)
+        } catch {
+            firstError = error
+        }
+        do {
+            try await stopControllerIfNeeded(managerServiceController)
+        } catch {
+            if firstError == nil { firstError = error }
+        }
+        if let firstError { throw firstError }
     }
 
     /// 返回 launchd 层可观测的服务状态。
@@ -901,8 +929,9 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     }
 
-    /// 仅在 CPA 与 CPAMP 均健康时打开不含密钥的 Full Mode 管理页。
+    /// 按需启动 CPAMP，并仅在管理服务健康时打开不含密钥的 Full Mode 页面。
     func openManagementPage() async throws {
+        try await managerServiceController.start()
         let managerConfiguration = try managerConfigurationProvider.load()
         try await managerHealthChecker.validate(managerConfiguration)
         guard browser.open(managerConfiguration.managementPageURL) else {
@@ -916,5 +945,12 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         guard clipboard.write(managerConfiguration.adminKey) else {
             throw CPARuntimeError.clipboardWriteFailed
         }
+    }
+
+    /// 仅停止已加载或状态异常的服务，兼容未安装与已经关闭的用户级组件。
+    private func stopControllerIfNeeded(_ controller: CPAServiceControlling) async throws {
+        let serviceStatus = await controller.status()
+        guard serviceStatus != .notInstalled, serviceStatus != .stopped, serviceStatus != .unknown else { return }
+        try await controller.stop()
     }
 }

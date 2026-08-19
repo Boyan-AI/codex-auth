@@ -99,6 +99,14 @@ pub const GuiCpaRouteOptions = union(enum) {
     enable: GuiCpaRouteEnableOptions,
     disable,
 };
+pub const GuiNewApiRouteEnableOptions = struct {
+    base_url: []u8,
+    client_config_path: []u8,
+};
+pub const GuiNewApiRouteOptions = union(enum) {
+    enable: GuiNewApiRouteEnableOptions,
+    disable,
+};
 pub const ApiKeyProvider = enum { openai, relay };
 pub const GuiAddApiKeyOptions = struct {
     alias: []u8,
@@ -115,6 +123,7 @@ pub const GuiOptions = union(enum) {
     remove_account: []u8,
     alias: GuiAliasOptions,
     cpa_route: GuiCpaRouteOptions,
+    newapi_route: GuiNewApiRouteOptions,
     add_api_key: GuiAddApiKeyOptions,
 };
 pub const HelpTopic = enum {

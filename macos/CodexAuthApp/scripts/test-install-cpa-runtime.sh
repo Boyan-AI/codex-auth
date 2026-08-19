@@ -95,7 +95,7 @@ EOF
     cat > "${ARCHIVE_ROOT}/cli-proxy-api" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-h" ]]; then
-    echo "CLIProxyAPI Version: 7.2.116, Commit: fixture, BuiltAt: fixture"
+    echo "CLIProxyAPI Version: 7.2.120, Commit: fixture, BuiltAt: fixture"
 fi
 exit 0
 EOF
@@ -211,7 +211,7 @@ test_fresh_install_is_stopped() {
 
     run_installer "${home_dir}" "${log_path}" "${state_path}"
 
-    assert_equal "$(<"${runtime_dir}/VERSION")" "7.2.116" "CPA version"
+    assert_equal "$(<"${runtime_dir}/VERSION")" "7.2.120" "CPA version"
     assert_equal "$(<"${runtime_dir}/PANEL_VERSION")" "v1.21.4" "Panel version"
     assert_file_exists "${runtime_dir}/static/management.html"
     assert_file_exists "${runtime_dir}/bin/codex-auth-cpa-credential"

@@ -11,6 +11,18 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(state.globalRoute, .cpa)
     }
 
+    /// 验证桌面端识别 NewAPI 路由，并将未知路由安全降级为直连。
+    func testDecodesNewAPIAndFallsBackForUnknownGlobalRoute() throws {
+        let newapiJSON = Data(#"{"schema_version":6,"codex_home":"/tmp/codex","global_route":"newapi","active_account_key":null,"generated_at":"2026-08-05T00:00:00Z","refresh":{"attempted":false,"status":"skipped","message":null},"warnings":[],"accounts":[]}"#.utf8)
+        let unknownJSON = Data(#"{"schema_version":6,"codex_home":"/tmp/codex","global_route":"future-route","active_account_key":null,"generated_at":"2026-08-05T00:00:00Z","refresh":{"attempted":false,"status":"skipped","message":null},"warnings":[],"accounts":[]}"#.utf8)
+
+        let newapiState = try JSONDecoder.codexAuth.decode(CodexAuthState.self, from: newapiJSON)
+        let unknownState = try JSONDecoder.codexAuth.decode(CodexAuthState.self, from: unknownJSON)
+
+        XCTAssertEqual(newapiState.globalRoute, .newapi)
+        XCTAssertEqual(unknownState.globalRoute, .direct)
+    }
+
     func testAPIKeyConnectionUsesBalanceAndDoesNotRequireQuotaWindows() throws {
         let json = Data("""
         {
@@ -389,6 +401,19 @@ final class ModelsTests: XCTestCase {
 
         XCTAssertEqual(presentation.plainText, "KEY")
         XCTAssertEqual(presentation.segments.map(\.tone), [.unavailable])
+    }
+
+    /// 验证 NewAPI 模式收起后显示可读连接状态，不再显示直连账号额度。
+    func testStatusItemPresentationShowsNewAPIHealthState() {
+        let presentation = StatusItemPresentation(
+            account: nil,
+            isLoading: false,
+            globalRoute: .newapi,
+            newAPIServiceStatus: .running
+        )
+
+        XCTAssertEqual(presentation.statusBarButtonText, "NewAPI · 已连接")
+        XCTAssertEqual(presentation.segments.map(\.tone), [.available])
     }
 
     /// 验证额度文案变化时状态项宽度保持稳定，且短文案仍围绕弹窗锚点居中。

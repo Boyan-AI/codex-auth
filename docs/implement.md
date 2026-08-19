@@ -10,6 +10,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 - Schema migration: [docs/schema-migration.md](./schema-migration.md)
 - Test organization: [docs/tests.md](./tests.md)
 - CPA global service routing: [docs/cpa-smart-routing.md](./cpa-smart-routing.md)
+- NewAPI local workbench: [docs/newapi-workbench.md](./newapi-workbench.md)
 - Release and CI: [docs/release.md](./release.md)
 
 ## Runtime State
@@ -128,7 +129,7 @@ the running machine's local calendar date, so daily totals roll over at local 00
 
 ## Desktop Refresh Coordination
 
-- App launch reads local state, reconciles CPA, and then starts one background full Token scan.
+- App launch reads local state, reconciles the persisted direct/CPA/NewAPI route, and then starts one background full Token scan.
 - Opening the menu only reloads local state and does not perform network or Token work.
 - The 60-second timer and manual refresh update quota data and then run an incremental Token scan.
 - An incremental Token scan waits for the launch full scan before accessing the shared cache.
@@ -136,7 +137,7 @@ the running machine's local calendar date, so daily totals roll over at local 00
 
 CPA does not participate in quota or Token refresh coordination. The desktop app does not read CPA account data or poll CPA request events; Token totals remain derived from local rollout files.
 
-The managed CPA runtime lives under `~/Library/Application Support/Codex Auth/CPA` and is controlled by the user-level `com.codex-auth.cpa` LaunchAgent. CPA owns all data under its account/provider configuration boundary. Codex Auth owns only the fixed local service contract, pinned management panel, service lifecycle, and the root-level registry `global_route` used to patch the shared Codex provider.
+The managed CPA runtime lives under `~/Library/Application Support/Codex Auth/CPA` and is controlled by the user-level `com.codex-auth.cpa` LaunchAgent. Its CPAMP management service uses `com.codex-auth.cpamp` and is started on demand for the management page, then stopped with the CPA gateway during route disable or app exit. The managed NewAPI runtime lives under `~/Library/Application Support/Codex Auth/NewAPI`, uses its own SQLite database, and is controlled by `com.codex-auth.newapi`. CPA and NewAPI own their respective account, channel, user, quota, and routing data. Codex Auth owns only the fixed local contracts, service lifecycle, protected client Token reference, and root-level `global_route` used to patch the shared Codex provider.
 
 
 ## Display Model
@@ -151,4 +152,4 @@ The managed CPA runtime lives under `~/Library/Application Support/Codex Auth/CP
 
 Command-specific display behavior lives in the relevant file under [docs/commands/](./commands/).
 
-The macOS menu uses a flat status-sorted account list rather than the CLI's grouped table. It keeps one 420-point popover for frequent actions and one reusable management window for accounts, routing, statistics, and settings. Selecting a row changes the active direct connection; while CPA is enabled, that selection is retained as the fallback used after CPA is disabled and the global CPA provider remains active.
+The macOS menu uses a 420-point popover with two conditional modes. Direct mode keeps the flat account list and existing management actions. NewAPI mode hides direct-account operations and shows only NewAPI/CPA health, native management links, disable, and quit. Selecting a row changes the fallback direct connection; while a managed proxy route is active, it does not replace the active global provider.

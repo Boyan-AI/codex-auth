@@ -23,6 +23,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, subcommand, "import")) return parseImport(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "alias")) return parseAlias(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "cpa-route")) return parseCpaRoute(allocator, args[1..]);
+    if (std.mem.eql(u8, subcommand, "newapi-route")) return parseNewApiRoute(allocator, args[1..]);
     if (std.mem.eql(u8, subcommand, "add-key")) return parseAddApiKey(allocator, args[1..]);
 
     if (common.isHelpFlag(subcommand)) {
@@ -32,6 +33,27 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui`.", .{subcommand});
     }
     return common.usageErrorResult(allocator, .gui, "unknown gui subcommand `{s}`.", .{subcommand});
+}
+
+/// 解析 NewAPI 全局路由启停参数；调用 Token 只由运行时凭据文件提供。
+fn parseNewApiRoute(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len == 1 and std.mem.eql(u8, std.mem.sliceTo(args[0], 0), "disable")) {
+        return .{ .command = .{ .gui = .{ .newapi_route = .disable } } };
+    }
+    if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[0], 0), "enable")) {
+        const base_url = try allocator.dupe(u8, std.mem.sliceTo(args[1], 0));
+        errdefer allocator.free(base_url);
+        return .{ .command = .{ .gui = .{ .newapi_route = .{ .enable = .{
+            .base_url = base_url,
+            .client_config_path = try allocator.dupe(u8, std.mem.sliceTo(args[2], 0)),
+        } } } } };
+    }
+    return common.usageErrorResult(
+        allocator,
+        .gui,
+        "`gui newapi-route` requires `enable <base-url> <client-config-path>` or `disable`.",
+        .{},
+    );
 }
 
 /// 解析 CPA 全局路由启停参数；客户端密钥只由运行时凭据文件提供。

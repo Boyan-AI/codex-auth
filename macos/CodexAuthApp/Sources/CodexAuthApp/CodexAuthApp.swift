@@ -1,7 +1,26 @@
 import SwiftUI
 
+/// 接管菜单栏 App 的退出确认，确保异步恢复直连和停服完成后再终止进程。
+final class CodexAuthAppDelegate: NSObject, NSApplicationDelegate {
+    weak var appState: AppState?
+    private var isTerminationInProgress = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let appState else { return .terminateNow }
+        guard !isTerminationInProgress else { return .terminateLater }
+        isTerminationInProgress = true
+        Task { @MainActor [weak self, weak sender, weak appState] in
+            let canTerminate = await appState?.shutdown() ?? true
+            sender?.reply(toApplicationShouldTerminate: canTerminate)
+            self?.isTerminationInProgress = false
+        }
+        return .terminateLater
+    }
+}
+
 @main
 struct CodexAuthMenuApp: App {
+    @NSApplicationDelegateAdaptor(CodexAuthAppDelegate.self) private var appDelegate
     private let appState: AppState
     private let statusItemController: StatusItemController
 
@@ -10,6 +29,7 @@ struct CodexAuthMenuApp: App {
         let appState = AppState(usageAlertPresenter: SystemUsageAlertPresenter())
         self.appState = appState
         self.statusItemController = StatusItemController(appState: appState)
+        appDelegate.appState = appState
         Task { @MainActor in
             appState.prepareUsageAlerts()
             appState.startPeriodicRefresh()

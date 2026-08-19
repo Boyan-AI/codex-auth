@@ -244,6 +244,8 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui alias clear <account-key>\n");
             try out.writeAll("  codex-auth gui cpa-route enable <base-url> <client-config-path>\n");
             try out.writeAll("  codex-auth gui cpa-route disable\n");
+            try out.writeAll("  codex-auth gui newapi-route enable <base-url> <client-config-path>\n");
+            try out.writeAll("  codex-auth gui newapi-route disable\n");
             try out.writeAll("  codex-auth gui import <path> [--alias <alias>]\n");
             try out.writeAll("  codex-auth gui login [--device-auth]\n");
         },
@@ -424,6 +426,8 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth gui switch user::account\n");
             try out.writeAll("  codex-auth gui cpa-route enable http://127.0.0.1:8317/v1 /path/to/client.json\n");
             try out.writeAll("  codex-auth gui cpa-route disable\n");
+            try out.writeAll("  codex-auth gui newapi-route enable http://127.0.0.1:3000/v1 /path/to/client.json\n");
+            try out.writeAll("  codex-auth gui newapi-route disable\n");
         },
     }
 }

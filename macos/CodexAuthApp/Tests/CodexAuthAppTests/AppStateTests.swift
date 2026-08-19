@@ -17,6 +17,108 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .running)
     }
 
+    /// 验证 NewAPI 开启顺序为 CPA 尝试启动、NewAPI 就绪、最后写入统一路由。
+    func testEnableNewAPIStartsOptionalCPABeforeChangingNewAPIRoute() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+
+        await appState.setNewAPIEnabled(true)
+
+        XCTAssertEqual(operations.values, ["service-start", "newapi-start", "newapi-route-enable"])
+        XCTAssertTrue(appState.isNewAPIEnabled)
+        XCTAssertEqual(appState.newAPIServiceStatus, .running)
+        XCTAssertEqual(appState.cpaServiceStatus, .running)
+    }
+
+    /// 验证 CPA 上游失败时仍可启动 NewAPI，并向用户保留降级提示。
+    func testEnableNewAPIContinuesWhenCPAUpstreamFails() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations)
+        cpaRuntime.startError = CPARuntimeError.unavailable("CPA offline")
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+
+        await appState.setNewAPIEnabled(true)
+
+        XCTAssertEqual(operations.values, ["service-start", "newapi-start", "newapi-route-enable"])
+        XCTAssertTrue(appState.isNewAPIEnabled)
+        XCTAssertTrue(appState.notice?.contains("CPA 上游未连接") == true)
+    }
+
+    /// 验证 NewAPI 关闭先恢复直连，再停 NewAPI 和 CPA。
+    func testDisableNewAPIRestoresDirectBeforeStoppingServices() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .newapi), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations, status: .running)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations, status: .running)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+        await appState.refresh()
+
+        await appState.setNewAPIEnabled(false)
+
+        XCTAssertEqual(operations.values, ["newapi-route-disable", "newapi-status", "newapi-stop", "newapi-status", "service-stop"])
+        XCTAssertFalse(appState.isNewAPIEnabled)
+        XCTAssertEqual(appState.newAPIServiceStatus, .stopped)
+        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+    }
+
+    /// 验证退出会先恢复直连，再停止 NewAPI 和 CPA 服务。
+    func testShutdownRestoresDirectAndStopsBothServices() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .newapi), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations, status: .running)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations, status: .running)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+        await appState.refresh()
+
+        let canTerminate = await appState.shutdown()
+
+        XCTAssertTrue(canTerminate)
+        XCTAssertEqual(operations.values, ["newapi-route-disable", "newapi-status", "newapi-stop", "newapi-status", "service-stop"])
+        XCTAssertFalse(appState.isNewAPIEnabled)
+        XCTAssertEqual(appState.newAPIServiceStatus, .stopped)
+        XCTAssertEqual(appState.cpaServiceStatus, .stopped)
+    }
+
+    /// 验证直连退出仍会清理 CPA 运行时拥有的管理服务，即使网关状态已经停止。
+    func testShutdownCleansCPAResourcesWhenGatewayIsAlreadyStopped() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations, status: .stopped)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations, status: .stopped)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+        await appState.refresh()
+
+        let canTerminate = await appState.shutdown()
+
+        XCTAssertTrue(canTerminate)
+        XCTAssertEqual(operations.values, ["newapi-status", "service-stop"])
+        XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
+    }
+
+    /// 验证退出前恢复直连失败时拒绝终止，并保留仍被路由引用的服务。
+    func testShutdownFailureKeepsRoutedServicesRunning() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .newapi), operations: operations)
+        client.disableError = CodexAuthCLIError.commandFailed("restore failed")
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations, status: .running)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations, status: .running)
+        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+        await appState.refresh()
+
+        let canTerminate = await appState.shutdown()
+
+        XCTAssertFalse(canTerminate)
+        XCTAssertEqual(operations.values, ["newapi-route-disable"])
+        XCTAssertEqual(newAPIRuntime.currentStatus, .running)
+        XCTAssertEqual(cpaRuntime.currentStatus, .running)
+        XCTAssertTrue(appState.errorMessage?.contains("恢复直连失败") == true)
+    }
+
     /// 验证关闭 CPA 先恢复直连路由，再停止服务。
     func testDisableCPARestoresDirectRouteBeforeStoppingService() async {
         let operations = OperationRecorder()
@@ -331,6 +433,21 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(runtime.openManagementCallCount, 1)
     }
 
+    /// 验证打开 NewAPI 管理页后立即刷新服务状态，支持首次初始化展示。
+    func testOpenNewAPIManagementPageRefreshesServiceStatus() async {
+        let runtime = StubNewAPIServiceRuntime(status: .stopped)
+        let appState = AppState(
+            client: StubCodexAuthClient(state: makeState()),
+            cpaRuntime: StubCPAServiceRuntime(),
+            newAPIRuntime: runtime
+        )
+
+        await appState.openNewAPIManagementPage()
+
+        XCTAssertEqual(runtime.openManagementCallCount, 1)
+        XCTAssertEqual(appState.newAPIServiceStatus, .running)
+    }
+
     /// 验证复制 CPAMP 管理员密钥只委托运行时，并给出完成状态。
     func testCopyManagementKeyDelegatesToRuntime() {
         let runtime = StubCPAServiceRuntime()
@@ -453,8 +570,24 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
         return state
     }
 
+    /// 记录 NewAPI 全局路由切换并返回对应权威状态。
+    func enableNewAPIRoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState {
+        operations?.values.append("newapi-route-enable")
+        if let enableError { throw enableError }
+        state = makeState(route: .newapi, activeAccountKey: state.activeAccountKey)
+        return state
+    }
+
     func disableCPARoute() async throws -> CodexAuthState {
         operations?.values.append("route-disable")
+        if let disableError { throw disableError }
+        state = makeState(route: .direct, activeAccountKey: state.activeAccountKey)
+        return state
+    }
+
+    /// 记录 NewAPI 关闭路由并返回直连状态。
+    func disableNewAPIRoute() async throws -> CodexAuthState {
+        operations?.values.append("newapi-route-disable")
         if let disableError { throw disableError }
         state = makeState(route: .direct, activeAccountKey: state.activeAccountKey)
         return state
@@ -503,6 +636,50 @@ final class StubCPAServiceRuntime: CPAServiceRuntimeProtocol {
     func copyManagementKey() throws {
         copyManagementKeyCallCount += 1
     }
+}
+
+/// 提供可控启停、状态和 Token 保存行为的 NewAPI 运行时替身。
+final class StubNewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
+    var operations: OperationRecorder?
+    var currentStatus: NewAPIServiceStatus
+    var startError: Error?
+    var stopError: Error?
+    var openManagementCallCount = 0
+
+    init(operations: OperationRecorder? = nil, status: NewAPIServiceStatus = .stopped) {
+        self.operations = operations
+        self.currentStatus = status
+    }
+
+    func startAndValidate() async throws -> NewAPIConfiguration {
+        operations?.values.append("newapi-start")
+        if let startError { throw startError }
+        currentStatus = .running
+        return try NewAPIConfiguration(
+            baseURLString: NewAPIConfiguration.defaultBaseURL,
+            apiKey: "client-key",
+            runtimeVersion: NewAPIInstallationPaths.expectedRuntimeVersion,
+            clientConfigurationURL: URL(fileURLWithPath: "/tmp/NewAPI/client.json")
+        )
+    }
+
+    func stop() async throws {
+        operations?.values.append("newapi-stop")
+        if let stopError { throw stopError }
+        currentStatus = .stopped
+    }
+
+    func status() async -> NewAPIServiceStatus {
+        operations?.values.append("newapi-status")
+        return currentStatus
+    }
+
+    func openManagementPage() async throws {
+        openManagementCallCount += 1
+        currentStatus = .running
+    }
+
+    func saveAPIKey(_ apiKey: String) throws {}
 }
 
 /// 在异步测试中暂停指定操作，直到测试显式继续。

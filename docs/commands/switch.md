@@ -62,6 +62,6 @@ When switching succeeds:
 
 ChatGPT account selections set the managed model and account defaults, and remove the API-key-only custom provider. API key selections use the CC Switch-compatible `model_provider = "custom"` and `[model_providers.custom]` format with the selected connection's Base URL. Switching does not manage `model_reasoning_effort`; an existing value is preserved, and an absent value continues to use the Codex default.
 
-When `global_route` is `cpa`, switching still updates `auth.json`, `active_account_key`, and the connection that will be used after CPA is disabled. It does not replace `model_provider = "codex_auth_cpa"` in `config.toml` and does not modify any CPA account or Key data.
+When `global_route` is `cpa` or `newapi`, switching still updates `auth.json`, `active_account_key`, and the fallback connection used after the managed route is disabled. It does not replace `model_provider = "codex_auth_cpa"` or `model_provider = "codex_auth_newapi"` in `config.toml`, and does not modify CPA or NewAPI-owned data.
 
 Provider configuration changes apply to newly started Codex processes or threads. Existing processes do not reload `config.toml` automatically. Because Codex associates session visibility with the active model provider, sessions created with one provider may be hidden while another provider is active; switching the global route back makes those sessions visible again without deleting their files.

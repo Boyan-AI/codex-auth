@@ -266,6 +266,25 @@ final class CPARuntimeTests: XCTestCase {
         ])
     }
 
+    /// 验证同一控制器可安全定向到 CPAMP，而不会误操作 CPA 网关标签。
+    func testLaunchAgentSupportsManagerServiceTarget() async throws {
+        let runner = RecordingCPAServiceCommandRunner()
+        let controller = LaunchAgentCPAServiceController(
+            runner: runner,
+            userID: 501,
+            launchAgentURL: URL(fileURLWithPath: "/tmp/com.codex-auth.cpamp.plist"),
+            serviceLabel: "com.codex-auth.cpamp",
+            fileExists: { _ in true }
+        )
+
+        try await controller.start()
+
+        XCTAssertEqual(runner.arguments, [
+            ["enable", "gui/501/com.codex-auth.cpamp"],
+            ["bootstrap", "gui/501", "/tmp/com.codex-auth.cpamp.plist"],
+        ])
+    }
+
     /// 验证缺少 LaunchAgent 时不执行任何启动命令。
     func testLaunchAgentReportsNotInstalled() async {
         let runner = RecordingCPAServiceCommandRunner()
@@ -347,11 +366,36 @@ final class CPARuntimeTests: XCTestCase {
         }
     }
 
+    /// 验证关闭运行时会同时停止已加载的 CPA 网关和 CPAMP 管理服务。
+    func testRuntimeStopsGatewayAndManagerServices() async throws {
+        let service = StubCPAServiceController()
+        service.currentStatus = .running
+        let managerService = StubCPAServiceController()
+        managerService.currentStatus = .running
+        let runtime = CPAServiceRuntime(
+            serviceController: service,
+            managerServiceController: managerService,
+            configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
+            healthChecker: SuccessfulCPAHealthChecker(),
+            contractChecker: AcceptingCPAContractChecker(),
+            browser: RecordingCPABrowser()
+        )
+
+        try await runtime.stop()
+
+        XCTAssertEqual(service.calls, ["stop"])
+        XCTAssertEqual(managerService.calls, ["stop"])
+        XCTAssertEqual(service.currentStatus, .stopped)
+        XCTAssertEqual(managerService.currentStatus, .stopped)
+    }
+
     /// 验证 CPAMP 未就绪时不会打开管理页。
     func testRuntimeRequiresCPAManagerHealthBeforeOpeningPage() async {
         let browser = RecordingCPABrowser()
+        let managerService = StubCPAServiceController()
         let runtime = CPAServiceRuntime(
             serviceController: StubCPAServiceController(),
+            managerServiceController: managerService,
             configurationProvider: FixedCPAConfigurationProvider(configuration: try! makeConfiguration()),
             healthChecker: SuccessfulCPAHealthChecker(),
             contractChecker: AcceptingCPAContractChecker(),
@@ -364,6 +408,7 @@ final class CPARuntimeTests: XCTestCase {
             try await runtime.openManagementPage()
             XCTFail("Expected CPAMP health check failure")
         } catch {
+            XCTAssertEqual(managerService.calls, ["start"])
             XCTAssertTrue(browser.openedURLs.isEmpty)
         }
     }
@@ -371,8 +416,10 @@ final class CPARuntimeTests: XCTestCase {
     /// 验证管理页只在健康检查通过后打开，且 URL 不携带任何密钥。
     func testRuntimeOpensManagementPageWithoutSecretInURL() async throws {
         let browser = RecordingCPABrowser()
+        let managerService = StubCPAServiceController()
         let runtime = CPAServiceRuntime(
             serviceController: StubCPAServiceController(),
+            managerServiceController: managerService,
             configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
             healthChecker: SuccessfulCPAHealthChecker(),
             contractChecker: AcceptingCPAContractChecker(),
@@ -383,6 +430,7 @@ final class CPARuntimeTests: XCTestCase {
 
         try await runtime.openManagementPage()
 
+        XCTAssertEqual(managerService.calls, ["start"])
         XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:18317/management.html")!])
         XCTAssertFalse(browser.openedURLs[0].absoluteString.contains("client-key"))
     }

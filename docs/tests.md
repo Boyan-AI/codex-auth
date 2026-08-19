@@ -91,6 +91,8 @@ HOME=/tmp/<task-name> swift test \
 
 The CPA global-routing suites cover schema 6 migration, route persistence, switching the fallback direct connection while CPA remains active, patch-preserving Codex configuration updates, command-backed client Key isolation, environment and macOS proxy rejection (including PAC and CGI environments), direct-only desktop URL sessions, credential-helper installation, service start/stop ordering, startup reconciliation and account-switch mutual exclusion, failure rollback, localhost-only runtime validation, pinned versions and panel assets, explicit Management Key copy, and system-browser management-page opening.
 
+The NewAPI workbench suites cover schema 6 `newapi` compatibility and unknown-route fallback, dedicated provider replacement, Token isolation, fixed runtime installation, SQLite/client-config preservation, service/setup/Token status mapping, optional CPA degradation, enable/disable/quit ordering, failed direct-route restoration, first-setup management-page startup, and collapsed menu health presentation.
+
 Validate the isolated CPA installer separately:
 
 ```sh
@@ -98,6 +100,16 @@ bash -n /path/to/repo/macos/CodexAuthApp/scripts/install-cpa-runtime.sh
 bash -n /path/to/repo/macos/CodexAuthApp/scripts/cpa-credential-helper.sh
 bash -n /path/to/repo/macos/CodexAuthApp/scripts/test-install-cpa-runtime.sh
 HOME=/tmp/<task-name> /path/to/repo/macos/CodexAuthApp/scripts/test-install-cpa-runtime.sh
+```
+
+Validate the isolated NewAPI installer separately:
+
+```sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/install-newapi-runtime.sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/newapi-credential-helper.sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/newapi-service-launcher.sh
+bash -n /path/to/repo/macos/CodexAuthApp/scripts/test-install-newapi-runtime.sh
+HOME=/tmp/<task-name> /path/to/repo/macos/CodexAuthApp/scripts/test-install-newapi-runtime.sh
 ```
 
 `tests/token_usage_test.zig`

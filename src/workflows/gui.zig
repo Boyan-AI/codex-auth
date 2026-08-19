@@ -23,8 +23,31 @@ pub fn handleGui(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli
         .remove_account => |account_key| try handleRemove(allocator, codex_home, account_key),
         .alias => |alias_opts| try handleAlias(allocator, codex_home, alias_opts),
         .cpa_route => |route_opts| try handleCpaRoute(allocator, codex_home, route_opts),
+        .newapi_route => |route_opts| try handleNewApiRoute(allocator, codex_home, route_opts),
         .add_api_key => |add_opts| try handleAddApiKey(allocator, codex_home, add_opts),
     }
+}
+
+/// 切换 NewAPI 全局路由并在配置写入成功后持久化注册表状态。
+fn handleNewApiRoute(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.types.GuiNewApiRouteOptions,
+) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    switch (opts) {
+        .enable => |enable_opts| try registry.enableNewApiCodexRoute(
+            allocator,
+            codex_home,
+            &reg,
+            enable_opts.base_url,
+            enable_opts.client_config_path,
+        ),
+        .disable => try registry.disableNewApiCodexRoute(allocator, codex_home, &reg),
+    }
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    try writeStateJson(allocator, codex_home, &reg, false, "skipped", null, null, null, null);
 }
 
 /// 切换 CPA 全局路由并在配置写入成功后持久化注册表状态。

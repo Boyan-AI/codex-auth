@@ -59,6 +59,7 @@ enum TokenUsageScanMode: Equatable {
 enum GlobalRoute: String, Codable, Equatable {
     case direct
     case cpa
+    case newapi
 }
 
 struct CodexAuthState: Decodable, Equatable {
@@ -103,7 +104,8 @@ struct CodexAuthState: Decodable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         codexHome = try container.decode(String.self, forKey: .codexHome)
-        globalRoute = try container.decodeIfPresent(GlobalRoute.self, forKey: .globalRoute) ?? .direct
+        let routeValue = try? container.decode(String.self, forKey: .globalRoute)
+        globalRoute = routeValue.flatMap(GlobalRoute.init(rawValue:)) ?? .direct
         activeAccountKey = try container.decodeIfPresent(String.self, forKey: .activeAccountKey)
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         refresh = try container.decode(RefreshInfo.self, forKey: .refresh)

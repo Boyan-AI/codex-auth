@@ -30,6 +30,8 @@ protocol CodexAuthClientProtocol {
     func importAuth(path: String, alias: String?) async throws -> CodexAuthState
     func enableCPARoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState
     func disableCPARoute() async throws -> CodexAuthState
+    func enableNewAPIRoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState
+    func disableNewAPIRoute() async throws -> CodexAuthState
 }
 
 extension CodexAuthClientProtocol {
@@ -51,6 +53,16 @@ extension CodexAuthClientProtocol {
     /// 未实现 CPA 路由的替代客户端返回明确错误。
     func disableCPARoute() async throws -> CodexAuthState {
         throw CodexAuthCLIError.commandFailed("CPA routing is unavailable")
+    }
+
+    /// 未实现 NewAPI 路由的替代客户端返回明确错误。
+    func enableNewAPIRoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState {
+        throw CodexAuthCLIError.commandFailed("NewAPI routing is unavailable")
+    }
+
+    /// 未实现 NewAPI 路由的替代客户端返回明确错误。
+    func disableNewAPIRoute() async throws -> CodexAuthState {
+        throw CodexAuthCLIError.commandFailed("NewAPI routing is unavailable")
     }
 }
 
@@ -184,6 +196,16 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     /// 恢复最新备用直连连接。
     func disableCPARoute() async throws -> CodexAuthState {
         try await runStateCommand(["gui", "cpa-route", "disable"])
+    }
+
+    /// 开启全局 NewAPI provider，调用 Token 仅由后端引用受保护配置文件。
+    func enableNewAPIRoute(baseURL: String, clientConfigurationPath: String) async throws -> CodexAuthState {
+        try await runStateCommand(["gui", "newapi-route", "enable", baseURL, clientConfigurationPath])
+    }
+
+    /// 恢复最新备用直连连接。
+    func disableNewAPIRoute() async throws -> CodexAuthState {
+        try await runStateCommand(["gui", "newapi-route", "disable"])
     }
 
     /// 运行返回 GUI 状态 JSON 的命令并统一错误映射。

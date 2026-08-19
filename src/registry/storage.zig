@@ -398,6 +398,7 @@ fn parseGlobalRoute(value: ?std.json.Value) GlobalRoute {
         else => return .direct,
     };
     if (std.mem.eql(u8, text, "cpa")) return .cpa;
+    if (std.mem.eql(u8, text, "newapi")) return .newapi;
     return .direct;
 }
 
@@ -407,7 +408,9 @@ fn hasValidGlobalRoute(value: ?std.json.Value) bool {
         .string => |route| route,
         else => return false,
     };
-    return std.mem.eql(u8, text, "direct") or std.mem.eql(u8, text, "cpa");
+    return std.mem.eql(u8, text, "direct") or
+        std.mem.eql(u8, text, "cpa") or
+        std.mem.eql(u8, text, "newapi");
 }
 
 fn parseRegistryLiveConfig(live: *LiveConfig, root_obj: std.json.ObjectMap) void {

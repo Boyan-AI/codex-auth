@@ -16,15 +16,18 @@ final class AppState: ObservableObject {
     @Published private(set) var tokenUsage: TokenUsageInfo?
     @Published private(set) var deletedAccounts: [DeletedAccountRecord]
     @Published private(set) var cpaServiceStatus: CPAServiceStatus = .unknown
+    @Published private(set) var newAPIServiceStatus: NewAPIServiceStatus = .unknown
     @Published private(set) var isLoading = false
     @Published private(set) var isAccountSwitchInProgress = false
     @Published private(set) var isCPAOperationInProgress = false
+    @Published private(set) var isNewAPIOperationInProgress = false
     @Published var errorMessage: String?
     @Published var notice: String?
     @Published var pendingDeleteAccount: CodexAccount?
 
     private let client: CodexAuthClientProtocol
     private let cpaRuntime: CPAServiceRuntimeProtocol
+    private let newAPIRuntime: NewAPIServiceRuntimeProtocol
     private let usageAlertPresenter: UsageAlertPresenting
     private var usageAlertTracker = UsageAlertTracker()
     private var didRefreshOnAppLaunch = false
@@ -37,15 +40,18 @@ final class AppState: ObservableObject {
     private var pendingStateLoad = false
     private var tokenUsageGeneration = 0
     private var loadSequence = 0
+    private var isShuttingDown = false
 
     /// 注入状态客户端和低额度展示器，便于隔离系统通知并测试阈值行为。
     init(
         client: CodexAuthClientProtocol = CodexAuthCLIClient(),
         cpaRuntime: CPAServiceRuntimeProtocol = CPAServiceRuntime(),
+        newAPIRuntime: NewAPIServiceRuntimeProtocol = NewAPIServiceRuntime(),
         usageAlertPresenter: UsageAlertPresenting? = nil
     ) {
         self.client = client
         self.cpaRuntime = cpaRuntime
+        self.newAPIRuntime = newAPIRuntime
         self.usageAlertPresenter = usageAlertPresenter ?? DisabledUsageAlertPresenter()
         self.deletedAccounts = DeletedAccountStore.load()
     }
@@ -63,6 +69,11 @@ final class AppState: ObservableObject {
     /// 返回注册表中的权威全局路由状态。
     var isCPAEnabled: Bool {
         state?.globalRoute == .cpa
+    }
+
+    /// 返回桌面端产品模式是否已经切换到 NewAPI 统一出口。
+    var isNewAPIEnabled: Bool {
+        state?.globalRoute == .newapi
     }
 
     /// 提前准备系统通知权限，避免首次低额度事件只出现授权提示。
@@ -86,10 +97,15 @@ final class AppState: ObservableObject {
             isCPAOperationInProgress = false
             return
         }
-        if state.globalRoute == .cpa {
+        if state.globalRoute == .newapi {
+            isNewAPIOperationInProgress = true
+            await enableNewAPI(showSuccessNotice: false)
+            isNewAPIOperationInProgress = false
+        } else if state.globalRoute == .cpa {
             await enableCPA(showSuccessNotice: false)
         } else {
             await disableCPA(showSuccessNotice: false)
+            await stopNewAPIIfNeeded()
         }
         isCPAOperationInProgress = false
         startInitialTokenRefresh()
@@ -104,8 +120,12 @@ final class AppState: ObservableObject {
 
     /// 菜单打开时只读取本地权威状态；CPA 路由写入期间跳过，避免并发 CLI 覆盖注册表。
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
-        guard !isCPAOperationInProgress else { return }
+        guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
         await requestRefresh(.state, apiMode: apiMode)
+        if isNewAPIEnabled {
+            await refreshNewAPIServiceStatus()
+            await refreshCPAServiceStatus()
+        }
     }
 
     func startPeriodicRefresh(
@@ -128,18 +148,18 @@ final class AppState: ObservableObject {
     }
 
     func refreshOnPeriodicTimer(apiMode: CodexAuthAPIMode = .automatic) async {
-        guard !isCPAOperationInProgress else { return }
+        guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
         await requestRefresh(.quota, apiMode: apiMode)
     }
 
     /// 手动刷新额度与 Token；CPA 路由写入期间留待下次刷新。
     func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
-        guard !isCPAOperationInProgress else { return }
+        guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
         await requestRefresh(.quota, apiMode: apiMode)
     }
 
     func switchAccount(accountKey: String) async {
-        guard !isAccountSwitchInProgress, !isCPAOperationInProgress else {
+        guard !isAccountSwitchInProgress, !isCPAOperationInProgress, !isNewAPIOperationInProgress else {
             return
         }
         let currentState = state
@@ -147,9 +167,14 @@ final class AppState: ObservableObject {
         defer { isAccountSwitchInProgress = false }
         await load {
             let switchedState = try await client.switchAccount(accountKey: accountKey)
-            notice = switchedState.globalRoute == .cpa
-                ? "已更新备用直连账号。关闭 CPA 后将使用此账号。"
-                : "已切换账号。新的 Codex CLI 会话将使用此账号。"
+            notice = switch switchedState.globalRoute {
+            case .cpa:
+                "已更新备用直连账号。关闭 CPA 后将使用此账号。"
+            case .newapi:
+                "已更新备用直连账号。关闭统一出口后将使用此账号。"
+            case .direct:
+                "已切换账号。新的 Codex CLI 会话将使用此账号。"
+            }
             return switchedState.preservingDisplayedTelemetry(from: currentState)
         }
     }
@@ -238,7 +263,7 @@ final class AppState: ObservableObject {
 
     /// 响应全局 CPA 开关，并防止并发启停交叉覆盖路由。
     func setCPAEnabled(_ enabled: Bool) async {
-        guard !isCPAOperationInProgress, !isAccountSwitchInProgress else { return }
+        guard !isCPAOperationInProgress, !isNewAPIOperationInProgress, !isAccountSwitchInProgress else { return }
         isCPAOperationInProgress = true
         defer { isCPAOperationInProgress = false }
         let activeRefresh = refreshLoopTask
@@ -250,6 +275,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 响应 NewAPI 统一出口开关，并串行完成上游服务、路由和回滚。
+    func setNewAPIEnabled(_ enabled: Bool) async {
+        guard !isNewAPIOperationInProgress, !isCPAOperationInProgress, !isAccountSwitchInProgress else { return }
+        isNewAPIOperationInProgress = true
+        defer { isNewAPIOperationInProgress = false }
+        let activeRefresh = refreshLoopTask
+        await activeRefresh?.value
+        if enabled {
+            await enableNewAPI(showSuccessNotice: true)
+        } else {
+            await disableNewAPI(showSuccessNotice: true)
+        }
+    }
+
     /// CPAMP 健康检查通过后使用系统浏览器打开 Full Mode 管理页。
     func openCPAManagementPage() async {
         errorMessage = nil
@@ -258,6 +297,30 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             cpaServiceStatus = await cpaRuntime.status()
+        }
+    }
+
+    /// 通过 NewAPI 原生网页打开本机管理入口，不向网页传递调用 Token。
+    func openNewAPIManagementPage() async {
+        errorMessage = nil
+        do {
+            try await newAPIRuntime.openManagementPage()
+            newAPIServiceStatus = await newAPIRuntime.status()
+        } catch {
+            errorMessage = error.localizedDescription
+            newAPIServiceStatus = await newAPIRuntime.status()
+        }
+    }
+
+    /// 保存用户从 NewAPI 网页创建的调用 Token，并立即重新校验服务状态。
+    func saveNewAPIToken(_ apiKey: String) async {
+        errorMessage = nil
+        do {
+            try newAPIRuntime.saveAPIKey(apiKey)
+            await refreshNewAPIServiceStatus()
+            notice = "NewAPI Token 已保存。"
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -275,6 +338,53 @@ final class AppState: ObservableObject {
     /// 更新 launchd 层状态，不触发服务启停或全局配置写入。
     func refreshCPAServiceStatus() async {
         cpaServiceStatus = await cpaRuntime.status()
+    }
+
+    /// 更新 NewAPI 服务状态，不触发启停和全局路由写入。
+    func refreshNewAPIServiceStatus() async {
+        newAPIServiceStatus = await newAPIRuntime.status()
+    }
+
+    /// 退出前按直连路由、NewAPI、CPA 的顺序完成停服，再由 AppDelegate 终止进程。
+    func shutdown() async -> Bool {
+        guard !isShuttingDown else { return false }
+        isShuttingDown = true
+        periodicRefreshTask?.cancel()
+        initialTokenRefreshTask?.cancel()
+        await refreshLoopTask?.value
+
+        if state?.globalRoute == .newapi {
+            do {
+                let directState = try await client.disableNewAPIRoute()
+                await acceptAuthoritativeRouteState(directState)
+            } catch {
+                errorMessage = "退出前恢复直连失败：\(error.localizedDescription)"
+                isShuttingDown = false
+                return false
+            }
+        } else if state?.globalRoute == .cpa {
+            do {
+                let directState = try await client.disableCPARoute()
+                await acceptAuthoritativeRouteState(directState)
+            } catch {
+                errorMessage = "退出前恢复直连失败：\(error.localizedDescription)"
+                isShuttingDown = false
+                return false
+            }
+        }
+        let newAPIStopError = await stopNewAPIIfNeeded()
+        let cpaStopError = await stopCPAIfNeeded()
+        if let newAPIStopError {
+            errorMessage = "退出前停止 NewAPI 失败：\(newAPIStopError.localizedDescription)"
+            isShuttingDown = false
+            return false
+        }
+        if let cpaStopError {
+            errorMessage = "退出前停止 CPA 失败：\(cpaStopError.localizedDescription)"
+            isShuttingDown = false
+            return false
+        }
+        return true
     }
 
     /// 先启动并校验服务，再提交全局 CPA 路由；任一步失败都恢复直连并停服。
@@ -315,6 +425,50 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 尝试启动 CPA 作为 NewAPI 上游；CPA 失败只降级状态，不阻断 NewAPI。
+    private func enableNewAPI(showSuccessNotice: Bool) async {
+        errorMessage = nil
+        newAPIServiceStatus = .starting
+        var cpaStartError: Error?
+        do {
+            _ = try await cpaRuntime.startAndValidate()
+            cpaServiceStatus = .running
+        } catch {
+            cpaStartError = error
+            cpaServiceStatus = await cpaRuntime.status()
+        }
+
+        do {
+            let configuration = try await newAPIRuntime.startAndValidate()
+            let updatedState = try await client.enableNewAPIRoute(
+                baseURL: configuration.baseURL.absoluteString,
+                clientConfigurationPath: configuration.clientConfigurationURL.path
+            )
+            await acceptAuthoritativeRouteState(updatedState)
+            newAPIServiceStatus = .running
+            if showSuccessNotice {
+                notice = cpaStartError == nil
+                    ? "NewAPI 已开启。新建 Codex 会话将统一使用 NewAPI。"
+                    : "NewAPI 已开启，但 CPA 上游未连接：\(cpaStartError!.localizedDescription)"
+            }
+        } catch let enableError {
+            do {
+                let directState = try await client.disableNewAPIRoute()
+                await acceptAuthoritativeRouteState(directState)
+            } catch let rollbackError {
+                newAPIServiceStatus = await newAPIRuntime.status()
+                errorMessage = "NewAPI 开启失败，恢复直连失败；服务保持运行：\(enableError.localizedDescription)；\(rollbackError.localizedDescription)"
+                return
+            }
+            await stopNewAPIIfNeeded()
+            await stopCPAIfNeeded()
+            newAPIServiceStatus = await newAPIRuntime.status()
+            errorMessage = cpaStartError == nil
+                ? "NewAPI 开启失败，已恢复直连：\(enableError.localizedDescription)"
+                : "NewAPI 开启失败，已恢复直连；CPA 上游也已停止：\(enableError.localizedDescription)"
+        }
+    }
+
     /// 先恢复直连路由，再停止服务，确保新会话不会指向不可用端点。
     private func disableCPA(showSuccessNotice: Bool) async {
         errorMessage = nil
@@ -333,6 +487,59 @@ final class AppState: ObservableObject {
         } catch {
             cpaServiceStatus = await cpaRuntime.status()
             errorMessage = "已恢复直连，但 CPA 服务停止失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 先恢复直连路由，再停 NewAPI 和 CPA，避免留下指向已关闭服务的配置。
+    private func disableNewAPI(showSuccessNotice: Bool) async {
+        errorMessage = nil
+        do {
+            let directState = try await client.disableNewAPIRoute()
+            await acceptAuthoritativeRouteState(directState)
+        } catch {
+            newAPIServiceStatus = await newAPIRuntime.status()
+            errorMessage = error.localizedDescription
+            return
+        }
+        let newAPIStopError = await stopNewAPIIfNeeded()
+        let cpaStopError = await stopCPAIfNeeded()
+        if let newAPIStopError {
+            errorMessage = "已恢复直连，但 NewAPI 服务停止失败：\(newAPIStopError.localizedDescription)"
+        } else if let cpaStopError {
+            errorMessage = "已恢复直连并关闭 NewAPI，但 CPA 服务停止失败：\(cpaStopError.localizedDescription)"
+        } else if showSuccessNotice {
+            notice = "NewAPI 已关闭。新建 Codex 会话将使用当前直连账号。"
+        }
+    }
+
+    /// 只在服务确实已安装并运行时执行停止，避免退出时把“未安装”误报为故障。
+    @discardableResult
+    private func stopNewAPIIfNeeded() async -> Error? {
+        let status = await newAPIRuntime.status()
+        newAPIServiceStatus = status
+        guard status != .notInstalled, status != .stopped, status != .unknown else { return nil }
+        do {
+            try await newAPIRuntime.stop()
+            newAPIServiceStatus = await newAPIRuntime.status()
+            return nil
+        } catch {
+            newAPIServiceStatus = await newAPIRuntime.status()
+            return error
+        }
+    }
+
+    /// 始终要求运行时清理 CPA 所有受管服务，包括网关已停但 CPAMP 仍在运行的场景。
+    @discardableResult
+    private func stopCPAIfNeeded() async -> Error? {
+        let status = await cpaRuntime.status()
+        cpaServiceStatus = status
+        do {
+            try await cpaRuntime.stop()
+            cpaServiceStatus = await cpaRuntime.status()
+            return nil
+        } catch {
+            cpaServiceStatus = await cpaRuntime.status()
+            return error
         }
     }
 

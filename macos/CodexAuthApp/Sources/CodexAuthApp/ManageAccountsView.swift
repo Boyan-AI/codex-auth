@@ -521,7 +521,7 @@ private struct AccountDetailView: View {
     /// 选择关闭 CPA 后使用的直连连接。
     private var routingControls: some View {
         HStack {
-            Text(appState.isCPAEnabled ? "关闭 CPA 后使用" : (account.isAPIKey ? "直连 Key" : "直连账号"))
+            Text(appState.isNewAPIEnabled || appState.isCPAEnabled ? "关闭统一出口后使用" : (account.isAPIKey ? "直连 Key" : "直连账号"))
             Spacer()
             Button(account.isActive ? "当前账号" : "设为当前") {
                 Task { await appState.switchAccount(accountKey: account.accountKey) }

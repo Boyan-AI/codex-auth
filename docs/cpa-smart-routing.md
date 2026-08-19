@@ -22,7 +22,7 @@ Codex Auth and CPA have separate account and Key stores.
 - Codex Auth never copies, synchronizes, disables, deletes, or reconciles CPA account data.
 - Selecting a Codex Auth connection while CPA is enabled updates `auth.json`, registry state, and the fallback direct connection. It does not replace the active CPA provider.
 
-Registry schema 6 stores one root-level `global_route` value: `direct` or `cpa`. Per-account smart-pool membership no longer exists. Registries from schema 5 or earlier migrate to `direct`; legacy smart-pool fields are ignored and omitted on the next save.
+Registry schema 6 stores one root-level `global_route` value: `direct`, legacy `cpa`, or `newapi`. Per-account smart-pool membership no longer exists. Registries from schema 5 or earlier migrate to `direct`; legacy smart-pool fields are ignored and omitted on the next save. The desktop product now uses NewAPI as the unified route and keeps CPA routing commands only for compatibility; see [NewAPI Local Workbench](./newapi-workbench.md).
 
 ## Global Codex Configuration
 
@@ -50,7 +50,7 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 
 ## Runtime Contract
 
-The managed runtime is pinned to CLIProxyAPI `7.2.116` and management panel `v1.21.4`. The installer contains and verifies the expected SHA-256 for both assets before writing the runtime.
+The managed runtime is pinned to CLIProxyAPI `7.2.120` and management panel `v1.21.4`. The installer contains and verifies the expected SHA-256 for both assets before writing the runtime.
 
 - Runtime root: `~/Library/Application Support/Codex Auth/CPA`
 - CPA configuration: `config.yaml`, mode `0600`
@@ -65,7 +65,7 @@ The installer creates a localhost-only default configuration and installs the se
 The app validates the installed contract before selecting the global CPA provider:
 
 - the proxy listens on `127.0.0.1:8317` and remote management is disabled;
-- the authenticated Management API reports CPA `7.2.116` and contains the installed client Key;
+- the authenticated Management API reports CPA `7.2.120` and contains the installed client Key;
 - the raw authenticated configuration uses the supported localhost and panel safety fields;
 - the served `management.html` matches the pinned panel SHA-256;
 - the command authentication helper is installed and executable;
@@ -75,7 +75,7 @@ The validation parser accepts only the installer-owned YAML representation. Unsu
 
 ## Service Lifecycle
 
-CPA is a user-level LaunchAgent. Closing Codex Auth does not stop it.
+CPA is a user-level LaunchAgent. In the NewAPI workbench, quitting Codex Auth restores direct routing and stops both NewAPI and CPA. Legacy CPA-only lifecycle behavior below remains documented for compatibility.
 
 Enable order:
 

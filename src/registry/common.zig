@@ -9,8 +9,8 @@ const c_time = @cImport({
 pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 pub const ProviderKind = enum { openai, relay };
-/// 表示新建 Codex 会话当前使用直连连接还是本机 CPA 服务。
-pub const GlobalRoute = enum { direct, cpa };
+/// 表示新建 Codex 会话当前使用直连连接、旧 CPA 路由还是本机 NewAPI 服务。
+pub const GlobalRoute = enum { direct, cpa, newapi };
 pub const current_schema_version: u32 = 6;
 pub const min_supported_schema_version: u32 = 2;
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {

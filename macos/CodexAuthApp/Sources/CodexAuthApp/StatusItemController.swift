@@ -17,10 +17,20 @@ struct StatusItemPresentation: Equatable {
     let isLoading: Bool
 
     /// 根据账号实际返回的窗口生成菜单栏片段，缺失的 5 小时窗口不会占位。
-    init(account: CodexAccount?, isLoading: Bool, resetCredits: ResetCreditsInfo? = nil) {
+    init(
+        account: CodexAccount?,
+        isLoading: Bool,
+        resetCredits: ResetCreditsInfo? = nil,
+        globalRoute: GlobalRoute = .direct,
+        newAPIServiceStatus: NewAPIServiceStatus = .unknown
+    ) {
         self.isLoading = isLoading
         // 顶部状态栏只显示周用量百分比；reset 详情仅展示在账号展开行中。
         _ = resetCredits
+        if globalRoute == .newapi {
+            self.segments = [StatusItemSegment(text: newAPIServiceStatus.menuBarText, tone: newAPIServiceStatus.menuBarTone)]
+            return
+        }
         if account?.isAPIKey == true {
             self.segments = [StatusItemSegment(text: "KEY", tone: .unavailable)]
             return
@@ -131,6 +141,7 @@ final class StatusItemController: NSObject, ObservableObject {
     private func bindState() {
         appState.$state
             .combineLatest(appState.$isLoading)
+            .combineLatest(appState.$newAPIServiceStatus)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _ in
                 self?.updateStatusItem()
@@ -142,7 +153,9 @@ final class StatusItemController: NSObject, ObservableObject {
         let presentation = StatusItemPresentation(
             account: appState.state?.activeAccount,
             isLoading: appState.isLoading,
-            resetCredits: appState.state?.resetCredits
+            resetCredits: appState.state?.resetCredits,
+            globalRoute: appState.state?.globalRoute ?? .direct,
+            newAPIServiceStatus: appState.newAPIServiceStatus
         )
         statusItem.length = presentation.minimumStatusItemLength
         // 自绘视图统一计算背景、文字和垂直位置，避免系统按钮默认基线造成视觉偏移。

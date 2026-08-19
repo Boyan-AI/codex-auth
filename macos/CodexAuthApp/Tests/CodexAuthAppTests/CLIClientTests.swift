@@ -21,6 +21,24 @@ final class CLIClientTests: XCTestCase {
         ])
     }
 
+    /// 验证桌面端通过独立命令开启和关闭 NewAPI，不复用旧 CPA 路由标签。
+    func testClientBuildsGlobalNewAPIRouteCommands() async throws {
+        let runner = RecordingCommandRunner(output: emptyStateJSON(route: "newapi"))
+        let client = makeClient(runner: runner)
+
+        _ = try await client.enableNewAPIRoute(
+            baseURL: "http://127.0.0.1:3000/v1",
+            clientConfigurationPath: "/tmp/NewAPI/client.json"
+        )
+        runner.output = emptyStateJSON(route: "direct")
+        _ = try await client.disableNewAPIRoute()
+
+        XCTAssertEqual(runner.calls.map(\.arguments), [
+            ["gui", "newapi-route", "enable", "http://127.0.0.1:3000/v1", "/tmp/NewAPI/client.json"],
+            ["gui", "newapi-route", "disable"],
+        ])
+    }
+
     /// 验证 API Key 只通过环境变量传递，不进入命令参数。
     func testClientAddsAPIKeyWithoutSecretArgument() async throws {
         let runner = RecordingCommandRunner(output: emptyStateJSON())

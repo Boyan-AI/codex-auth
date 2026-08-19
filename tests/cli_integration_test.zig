@@ -1850,6 +1850,64 @@ test "Scenario: Given CPA global route commands when enabling and disabling then
     try std.testing.expect(std.mem.indexOf(u8, disabled_config, "codex_auth_cpa") == null);
 }
 
+test "Scenario: Given NewAPI global route commands when enabling and disabling then state and config stay aligned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const client_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/NewAPI/client.json" });
+    defer gpa.free(client_path);
+    const credential_helper_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/NewAPI/bin/codex-auth-newapi-credential" });
+    defer gpa.free(credential_helper_path);
+
+    const enable_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "gui", "newapi-route", "enable", "http://127.0.0.1:3000/v1", client_path },
+    );
+    defer gpa.free(enable_result.stdout);
+    defer gpa.free(enable_result.stderr);
+    logRunResultIfFailed("enable NewAPI global route", enable_result);
+    try expectSuccess(enable_result);
+    try std.testing.expectEqualStrings("", enable_result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, enable_result.stdout, "\"global_route\":\"newapi\"") != null);
+
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    const enabled_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(enabled_config);
+    try std.testing.expect(std.mem.indexOf(u8, enabled_config, "model_provider = \"codex_auth_newapi\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, enabled_config, credential_helper_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, enabled_config, client_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, enabled_config, "codex_auth_cpa") == null);
+
+    const disable_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "gui", "newapi-route", "disable" },
+    );
+    defer gpa.free(disable_result.stdout);
+    defer gpa.free(disable_result.stderr);
+    logRunResultIfFailed("disable NewAPI global route", disable_result);
+    try expectSuccess(disable_result);
+    try std.testing.expectEqualStrings("", disable_result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, disable_result.stdout, "\"global_route\":\"direct\"") != null);
+
+    const disabled_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(disabled_config);
+    try std.testing.expect(std.mem.indexOf(u8, disabled_config, "codex_auth_newapi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, disabled_config, "codex_auth_cpa") == null);
+}
+
 test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

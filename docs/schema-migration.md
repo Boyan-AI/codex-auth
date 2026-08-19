@@ -49,7 +49,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Does not change account snapshot filenames or authentication payloads
 - `schema_version = 6`
   - Removes persisted per-account `smart_pool_enabled`; CPA no longer consumes the Codex Auth account catalog
-  - Adds root-level `global_route` with `direct` and `cpa` values
+  - Adds root-level `global_route`; current binaries accept `direct`, legacy `cpa`, and `newapi` values without changing the schema shape
   - Every schema `5` or older registry migrates to `direct`, even if an old file contains an untrusted `global_route` value
   - Account records, active and previous direct selections, snapshots, aliases, and usage data remain intact
 

@@ -103,6 +103,13 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
                 },
                 .disable => {},
             },
+            .newapi_route => |route_opts| switch (route_opts) {
+                .enable => |enable_opts| {
+                    allocator.free(enable_opts.base_url);
+                    allocator.free(enable_opts.client_config_path);
+                },
+                .disable => {},
+            },
             .add_api_key => |add_opts| {
                 allocator.free(add_opts.alias);
                 allocator.free(add_opts.base_url);

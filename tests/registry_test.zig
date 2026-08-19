@@ -586,6 +586,47 @@ test "registry load migrates schema five to six with direct global route" {
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"global_route\": \"direct\"") != null);
 }
 
+test "registry schema six preserves newapi route and rewrites unknown route to direct" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    const registry_template =
+        \\{
+        \\  "schema_version": 6,
+        \\  "global_route": "ROUTE",
+        \\  "active_account_key": null,
+        \\  "previous_active_account_key": null,
+        \\  "active_account_activated_at_ms": null,
+        \\  "interval_seconds": 60,
+        \\  "accounts": []
+        \\}
+    ;
+    const newapi_registry = try std.mem.replaceOwned(u8, gpa, registry_template, "ROUTE", "newapi");
+    defer gpa.free(newapi_registry);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json", .data = newapi_registry });
+
+    var loaded_newapi = try registry.loadRegistry(gpa, codex_home);
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, loaded_newapi.global_route);
+    loaded_newapi.deinit(gpa);
+
+    const unknown_registry = try std.mem.replaceOwned(u8, gpa, registry_template, "ROUTE", "future-route");
+    defer gpa.free(unknown_registry);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json", .data = unknown_registry });
+    var loaded_unknown = try registry.loadRegistry(gpa, codex_home);
+    defer loaded_unknown.deinit(gpa);
+    try std.testing.expectEqual(registry.GlobalRoute.direct, loaded_unknown.global_route);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"global_route\": \"direct\"") != null);
+}
+
 test "registry schema five ignores and removes legacy smart pool fields" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1589,6 +1630,66 @@ test "enableCpaCodexRoute rejects non-local provider addresses" {
     try std.testing.expectError(
         error.NonLocalCpaBaseURL,
         registry.enableCpaCodexRoute(gpa, codex_home, &reg, "https://proxy.example/v1", client_path),
+    );
+    try std.testing.expectEqual(registry.GlobalRoute.direct, reg.global_route);
+}
+
+test "NewAPI route replaces CPA provider and disable removes managed proxy providers" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    const cpa_client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    defer gpa.free(cpa_client_path);
+    const newapi_client_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI/client.json" });
+    defer gpa.free(newapi_client_path);
+    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI/bin/codex-auth-newapi-credential" });
+    defer gpa.free(credential_helper_path);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try registry.enableCpaCodexRoute(gpa, codex_home, &reg, "http://127.0.0.1:8317/v1", cpa_client_path);
+    try registry.enableNewApiCodexRoute(gpa, codex_home, &reg, "http://127.0.0.1:3000/v1", newapi_client_path);
+    try registry.enableNewApiCodexRoute(gpa, codex_home, &reg, "http://127.0.0.1:3000/v1", newapi_client_path);
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, reg.global_route);
+
+    const config_path = try fs.path.join(gpa, &.{ codex_home, "config.toml" });
+    defer gpa.free(config_path);
+    const newapi_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(newapi_config);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, "model_provider = \"codex_auth_newapi\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, "[model_providers.codex_auth_newapi.auth]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, credential_helper_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, newapi_client_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, "codex_auth_cpa") == null);
+    try std.testing.expect(std.mem.indexOf(u8, newapi_config, "newapi-secret-value") == null);
+
+    try registry.disableNewApiCodexRoute(gpa, codex_home, &reg);
+    try registry.disableNewApiCodexRoute(gpa, codex_home, &reg);
+    try std.testing.expectEqual(registry.GlobalRoute.direct, reg.global_route);
+    const direct_config = try fixtures.readFileAlloc(gpa, config_path);
+    defer gpa.free(direct_config);
+    try std.testing.expect(std.mem.indexOf(u8, direct_config, "codex_auth_newapi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, direct_config, "codex_auth_cpa") == null);
+}
+
+test "enableNewApiCodexRoute rejects non-local provider addresses" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    const client_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI/client.json" });
+    defer gpa.free(client_path);
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try std.testing.expectError(
+        error.NonLocalNewApiBaseURL,
+        registry.enableNewApiCodexRoute(gpa, codex_home, &reg, "https://newapi.example/v1", client_path),
     );
     try std.testing.expectEqual(registry.GlobalRoute.direct, reg.global_route);
 }

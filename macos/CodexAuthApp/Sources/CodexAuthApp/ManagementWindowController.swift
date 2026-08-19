@@ -200,7 +200,7 @@ private struct ManagementRootView: View {
     }
 }
 
-/// 展示 CPA 独立服务状态、全局开关和 CPAMP Full Mode 管理页入口。
+/// 展示 NewAPI 统一出口、CPA 上游状态和两个原生管理页入口。
 private struct RoutingManagementView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -208,41 +208,41 @@ private struct RoutingManagementView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("CPA 服务")
+                    Text(appState.isNewAPIEnabled ? "NewAPI 服务" : "NewAPI 统一出口")
                         .font(.title2.weight(.semibold))
-                    Text(appState.cpaServiceStatus.label)
+                    Text(appState.isNewAPIEnabled ? appState.newAPIServiceStatus.label : "直连模式")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Toggle(
-                    "全局路由",
+                    "NewAPI",
                     isOn: Binding(
-                        get: { appState.isCPAEnabled },
-                        set: { enabled in Task { await appState.setCPAEnabled(enabled) } }
+                        get: { appState.isNewAPIEnabled },
+                        set: { enabled in Task { await appState.setNewAPIEnabled(enabled) } }
                     )
                 )
                 .toggleStyle(.switch)
-                .disabled(appState.isCPAOperationInProgress || appState.isAccountSwitchInProgress)
+                .disabled(appState.isNewAPIOperationInProgress || appState.isAccountSwitchInProgress)
             }
 
             Divider()
 
             Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
                 GridRow {
-                    Text("服务地址")
+                    Text("NewAPI 地址")
+                    Text("http://127.0.0.1:3000")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                GridRow {
+                    Text("CPA 地址")
                     Text("http://127.0.0.1:8317")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 GridRow {
-                    Text("管理地址")
-                    Text("http://127.0.0.1:18317")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                GridRow {
                     Text("当前路由")
-                    Text(appState.isCPAEnabled ? "CPA" : "直连")
+                    Text(appState.isNewAPIEnabled ? "NewAPI" : "直连")
                         .foregroundStyle(.secondary)
                 }
                 GridRow {
@@ -254,7 +254,10 @@ private struct RoutingManagementView: View {
 
             HStack {
                 Button {
-                    Task { await appState.refreshCPAServiceStatus() }
+                    Task {
+                        await appState.refreshNewAPIServiceStatus()
+                        await appState.refreshCPAServiceStatus()
+                    }
                 } label: {
                     Label("刷新状态", systemImage: "arrow.clockwise")
                 }
@@ -266,19 +269,28 @@ private struct RoutingManagementView: View {
                 .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
                 Spacer()
                 Button {
-                    Task { await appState.openCPAManagementPage() }
+                    Task { await appState.openNewAPIManagementPage() }
                 } label: {
-                    Label("打开管理页", systemImage: "safari")
+                    Label("打开 NewAPI 管理页", systemImage: "safari")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(appState.cpaServiceStatus != .running || appState.isCPAOperationInProgress)
+                .disabled(appState.newAPIServiceStatus == .notInstalled || appState.isNewAPIOperationInProgress)
+                Button {
+                    Task { await appState.openCPAManagementPage() }
+                } label: {
+                    Label("打开 CPA 管理页", systemImage: "network")
+                }
+                .disabled(appState.cpaServiceStatus != .running || appState.isNewAPIOperationInProgress)
             }
 
             Spacer()
         }
         .padding(24)
         .navigationTitle("路由")
-        .task { await appState.refreshCPAServiceStatus() }
+        .task {
+            await appState.refreshNewAPIServiceStatus()
+            await appState.refreshCPAServiceStatus()
+        }
     }
 }
 
@@ -306,11 +318,38 @@ private struct UsageManagementView: View {
 
 /// 仅保留真正可编辑的额度代理，并用简短说明标注生效范围。
 private struct SettingsManagementView: View {
+    @EnvironmentObject private var appState: AppState
     @AppStorage(QuotaProxyConfiguration.userDefaultsKey) private var savedQuotaProxyURL = ""
     @State private var quotaProxyDraft = ""
+    @State private var newAPITokenDraft = ""
 
     var body: some View {
         Form {
+            Section("NewAPI 调用 Token") {
+                VStack(alignment: .leading, spacing: 10) {
+                    SecureField("粘贴 NewAPI Token", text: $newAPITokenDraft)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack {
+                        Text(appState.newAPIServiceStatus.label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("打开管理页") {
+                            Task { await appState.openNewAPIManagementPage() }
+                        }
+                        .disabled(appState.newAPIServiceStatus == .notInstalled)
+                        Button("保存 Token") {
+                            let token = newAPITokenDraft
+                            newAPITokenDraft = ""
+                            Task { await appState.saveNewAPIToken(token) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(newAPITokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+
             Section("额度刷新代理") {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("例如 http://127.0.0.1:7897", text: $quotaProxyDraft)
@@ -342,6 +381,7 @@ private struct SettingsManagementView: View {
         .navigationTitle("设置")
         .onAppear {
             quotaProxyDraft = savedQuotaProxyURL
+            Task { await appState.refreshNewAPIServiceStatus() }
         }
     }
 

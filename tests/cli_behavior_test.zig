@@ -216,6 +216,54 @@ test "Scenario: Given gui CPA route actions when parsing then route inputs are p
     }
 }
 
+test "Scenario: Given gui NewAPI route actions when parsing then route inputs are preserved" {
+    const gpa = std.testing.allocator;
+    const enable_args = [_][:0]const u8{
+        "codex-auth",
+        "gui",
+        "newapi-route",
+        "enable",
+        "http://127.0.0.1:3000/v1",
+        "/tmp/NewAPI/client.json",
+    };
+    var enable_result = try cli.commands.parseArgs(gpa, &enable_args);
+    defer cli.commands.freeParseResult(gpa, &enable_result);
+
+    switch (enable_result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .newapi_route => |route_opts| switch (route_opts) {
+                    .enable => |enable_opts| {
+                        try std.testing.expectEqualStrings("http://127.0.0.1:3000/v1", enable_opts.base_url);
+                        try std.testing.expectEqualStrings("/tmp/NewAPI/client.json", enable_opts.client_config_path);
+                    },
+                    else => return error.TestExpectedEqual,
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    const disable_args = [_][:0]const u8{ "codex-auth", "gui", "newapi-route", "disable" };
+    var disable_result = try cli.commands.parseArgs(gpa, &disable_args);
+    defer cli.commands.freeParseResult(gpa, &disable_result);
+    switch (disable_result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .newapi_route => |route_opts| switch (route_opts) {
+                    .disable => {},
+                    else => return error.TestExpectedEqual,
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given removed account-level CPA commands when parsing then usage errors are returned" {
     const gpa = std.testing.allocator;
     const smart_pool_args = [_][:0]const u8{ "codex-auth", "gui", "smart-pool", "acct-key", "include" };
@@ -649,7 +697,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 
-test "Scenario: Given gui help when rendering then global CPA route commands replace account-level commands" {
+test "Scenario: Given gui help when rendering then global managed route commands replace account-level commands" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -659,6 +707,8 @@ test "Scenario: Given gui help when rendering then global CPA route commands rep
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui cpa-route enable <base-url> <client-config-path>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui cpa-route disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui newapi-route enable <base-url> <client-config-path>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth gui newapi-route disable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "smart-pool") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "cpa-sync") == null);
 }
