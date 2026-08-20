@@ -349,7 +349,7 @@ final class AppState: ObservableObject {
     }
 
     /// 退出前按直连路由、NewAPI、CPA 的顺序完成停服，再由 AppDelegate 终止进程。
-    func shutdown() async -> Bool {
+    func shutdown(publishRouteState: Bool = true) async -> Bool {
         guard !isShuttingDown else { return false }
         isShuttingDown = true
         periodicRefreshTask?.cancel()
@@ -361,7 +361,9 @@ final class AppState: ObservableObject {
         if state?.globalRoute == .newapi {
             do {
                 let directState = try await client.disableNewAPIRoute()
-                await acceptAuthoritativeRouteState(directState)
+                if publishRouteState {
+                    await acceptAuthoritativeRouteState(directState)
+                }
             } catch {
                 errorMessage = "退出前恢复直连失败：\(error.localizedDescription)"
                 isShuttingDown = false
@@ -370,7 +372,9 @@ final class AppState: ObservableObject {
         } else if state?.globalRoute == .cpa {
             do {
                 let directState = try await client.disableCPARoute()
-                await acceptAuthoritativeRouteState(directState)
+                if publishRouteState {
+                    await acceptAuthoritativeRouteState(directState)
+                }
             } catch {
                 errorMessage = "退出前恢复直连失败：\(error.localizedDescription)"
                 isShuttingDown = false

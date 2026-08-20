@@ -63,7 +63,7 @@ struct MenuBarView: View {
                 Button("确认退出", role: .destructive) {
                     // 先执行统一清理，最多等待三秒；服务异常时仍保证菜单栏 App 能退出。
                     Task { @MainActor in
-                        let cleanup = Task { @MainActor in await appState.shutdown() }
+                        let cleanup = Task { @MainActor in await appState.shutdown(publishRouteState: false) }
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         cleanup.cancel()
                         Darwin.exit(0)
@@ -171,14 +171,6 @@ struct MenuBarView: View {
     /// NewAPI 模式的底部只保留关闭和退出，避免混入账号管理动作。
     private var newAPIFooter: some View {
         HStack(spacing: 8) {
-            Button {
-                isShowingDisableConfirmation = true
-            } label: {
-                Label("关闭", systemImage: "stop.circle")
-            }
-            .buttonStyle(.bordered)
-            .disabled(appState.isNewAPIOperationInProgress)
-
             Spacer()
 
             Button {
