@@ -29,9 +29,6 @@ struct MenuBarView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if isShowingQuitConfirmation {
-                quitConfirmation
-            }
         }
         .padding(14)
         .frame(width: 420)
@@ -179,10 +176,12 @@ struct MenuBarView: View {
             Spacer()
 
             Button {
-                // 菜单栏 App 的确认弹窗回调不稳定，退出入口直接结束进程。
                 isShowingQuitConfirmation = true
             } label: {
                 Label("退出", systemImage: "power")
+            }
+            .popover(isPresented: $isShowingQuitConfirmation, arrowEdge: .top) {
+                quitConfirmation
             }
         }
         .buttonStyle(.plain)
@@ -258,6 +257,9 @@ struct MenuBarView: View {
             footerButton("设置", systemImage: "gearshape", section: .settings)
             Button { isShowingQuitConfirmation = true } label: {
                 footerLabel("退出", systemImage: "power")
+            }
+            .popover(isPresented: $isShowingQuitConfirmation, arrowEdge: .top) {
+                quitConfirmation
             }
             .frame(maxWidth: .infinity)
         }
