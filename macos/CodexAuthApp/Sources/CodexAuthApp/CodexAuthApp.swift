@@ -7,11 +7,14 @@ final class CodexAuthAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState else { return .terminateNow }
-        guard !isTerminationInProgress else { return .terminateLater }
+        // AppKit 可能在异步清理期间重复询问；清理已经启动时直接放行，避免返回 terminateLater 却没有新的 reply。
+        guard !isTerminationInProgress else { return .terminateNow }
         isTerminationInProgress = true
-        Task { @MainActor [weak self, weak sender, weak appState] in
-            let canTerminate = await appState?.shutdown() ?? true
-            sender?.reply(toApplicationShouldTerminate: canTerminate)
+        let application = sender
+        let state = appState
+        Task { @MainActor [weak self] in
+            let canTerminate = await state.shutdown()
+            application.reply(toApplicationShouldTerminate: canTerminate)
             self?.isTerminationInProgress = false
         }
         return .terminateLater
