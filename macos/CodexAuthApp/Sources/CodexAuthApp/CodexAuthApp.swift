@@ -12,8 +12,17 @@ final class CodexAuthAppDelegate: NSObject, NSApplicationDelegate {
         isTerminationInProgress = true
         let application = sender
         let state = appState
+        let watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, self?.isTerminationInProgress == true else { return }
+            // 停服或路由恢复异常时也必须允许退出，避免菜单栏 App 永久占用进程；下次启动会重新对账服务状态。
+            application.reply(toApplicationShouldTerminate: true)
+            self?.isTerminationInProgress = false
+        }
         Task { @MainActor [weak self] in
             let canTerminate = await state.shutdown()
+            watchdog.cancel()
+            guard self?.isTerminationInProgress == true else { return }
             application.reply(toApplicationShouldTerminate: canTerminate)
             self?.isTerminationInProgress = false
         }
