@@ -16,7 +16,6 @@ struct MenuBarView: View {
             header
             if appState.isNewAPIEnabled {
                 newAPIControls
-                newAPIFooter
             } else {
                 directControls
                 accountControls
@@ -116,7 +115,7 @@ struct MenuBarView: View {
         .frame(minHeight: 32)
     }
 
-    /// NewAPI 模式只显示统一出口和两个上游管理网页入口。
+    /// NewAPI 模式只显示统一出口、两个上游管理入口和同排退出入口。
     private var newAPIControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -160,27 +159,21 @@ struct MenuBarView: View {
                     Label("管理 CPA", systemImage: "network")
                 }
                 .disabled(appState.cpaServiceStatus != .running || appState.isNewAPIOperationInProgress)
-            }
-        }
-        .frame(minHeight: 64)
-    }
 
-    /// NewAPI 模式的底部只保留退出，并与上方管理按钮左侧对齐。
-    private var newAPIFooter: some View {
-        HStack(spacing: 8) {
-            Button {
-                isShowingQuitConfirmation = true
-            } label: {
-                Label("退出", systemImage: "power")
-            }
-            .popover(isPresented: $isShowingQuitConfirmation, arrowEdge: .top) {
-                quitConfirmation
-            }
+                Spacer()
 
-            Spacer()
+                Button {
+                    isShowingQuitConfirmation = true
+                } label: {
+                    Label("退出", systemImage: "power")
+                }
+                .popover(isPresented: $isShowingQuitConfirmation, arrowEdge: .top) {
+                    quitConfirmation
+                }
+            }
         }
         .buttonStyle(.plain)
-        .frame(minHeight: 32)
+        .frame(minHeight: 64)
     }
 
     /// 将排序、今日消耗和额度与 Token 刷新合并为一行高频控制。
