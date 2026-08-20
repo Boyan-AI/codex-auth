@@ -9,7 +9,6 @@ struct MenuBarView: View {
     @State private var isShowingTokenUsage = false
     @State private var selectedSortOrder: AccountSortOrder = .added
     @State private var isShowingDisableConfirmation = false
-    @State private var isShowingQuitConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -43,19 +42,6 @@ struct MenuBarView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将先恢复直连，再停止 NewAPI 和 CPA。")
-        }
-        .confirmationDialog(
-            "退出 Codex Auth？",
-            isPresented: $isShowingQuitConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("退出并停止服务", role: .destructive) {
-                // 菜单栏弹窗的退出回调可能被 AppKit 挂起；确认动作同步结束进程，确保用户能退出。
-                Darwin.exit(0)
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("退出前会恢复直连，并停止 NewAPI 与 CPA 以节约本机资源。")
         }
     }
 
@@ -165,7 +151,8 @@ struct MenuBarView: View {
             Spacer()
 
             Button {
-                isShowingQuitConfirmation = true
+                // 菜单栏 App 的确认弹窗回调不稳定，退出入口直接结束进程。
+                Darwin.exit(0)
             } label: {
                 Label("退出", systemImage: "power")
             }
@@ -241,7 +228,7 @@ struct MenuBarView: View {
             footerButton("管理", systemImage: "person.2", section: .accounts)
             footerButton("统计", systemImage: "chart.bar", section: .usage)
             footerButton("设置", systemImage: "gearshape", section: .settings)
-            Button { isShowingQuitConfirmation = true } label: {
+            Button { Darwin.exit(0) } label: {
                 footerLabel("退出", systemImage: "power")
             }
             .frame(maxWidth: .infinity)
