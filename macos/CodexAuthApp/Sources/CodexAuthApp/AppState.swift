@@ -74,6 +74,11 @@ final class AppState: ObservableObject {
         state?.globalRoute == .cpa
     }
 
+    /// 返回 NewAPI 模式下 CPA 上游服务是否实际运行。
+    var isCPAServiceEnabled: Bool {
+        cpaServiceStatus == .running
+    }
+
     /// 返回桌面端产品模式是否已经切换到 NewAPI 统一出口。
     var isNewAPIEnabled: Bool {
         state?.globalRoute == .newapi
@@ -275,6 +280,32 @@ final class AppState: ObservableObject {
             await enableCPA(showSuccessNotice: true)
         } else {
             await disableCPA(showSuccessNotice: true)
+        }
+    }
+
+    /// 仅控制 NewAPI 使用的 CPA 上游服务，不改写当前全局路由。
+    func setCPAServiceEnabled(_ enabled: Bool) async {
+        guard !isCPAOperationInProgress, !isNewAPIOperationInProgress, !isAccountSwitchInProgress else { return }
+        isCPAOperationInProgress = true
+        defer { isCPAOperationInProgress = false }
+        errorMessage = nil
+        if enabled {
+            cpaServiceStatus = .starting
+            do {
+                _ = try await cpaRuntime.startAndValidate()
+                cpaServiceStatus = .running
+            } catch {
+                cpaServiceStatus = await cpaRuntime.status()
+                errorMessage = "CPA 上游启动失败：\(error.localizedDescription)"
+            }
+        } else {
+            do {
+                try await cpaRuntime.stop()
+                cpaServiceStatus = await cpaRuntime.status()
+            } catch {
+                cpaServiceStatus = await cpaRuntime.status()
+                errorMessage = "CPA 上游停止失败：\(error.localizedDescription)"
+            }
         }
     }
 

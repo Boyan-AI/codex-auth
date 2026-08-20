@@ -17,6 +17,22 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .running)
     }
 
+    /// 验证 NewAPI 模式下 CPA 独立开关只启停上游服务，不改写全局路由。
+    func testCPAServiceToggleControlsOnlyUpstreamService() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .newapi), operations: operations)
+        let runtime = StubCPAServiceRuntime(operations: operations)
+        let appState = AppState(client: client, cpaRuntime: runtime)
+
+        await appState.setCPAServiceEnabled(true)
+        XCTAssertEqual(operations.values, ["service-start"])
+        XCTAssertTrue(appState.isCPAServiceEnabled)
+
+        await appState.setCPAServiceEnabled(false)
+        XCTAssertEqual(operations.values, ["service-start", "service-stop"])
+        XCTAssertFalse(appState.isCPAServiceEnabled)
+    }
+
     /// 验证 NewAPI 开启顺序为 CPA 就绪、停服配置渠道、NewAPI 就绪和路由写入。
     func testEnableNewAPIStartsOptionalCPABeforeChangingNewAPIRoute() async {
         let operations = OperationRecorder()

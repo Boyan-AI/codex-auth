@@ -85,7 +85,7 @@ struct MenuBarView: View {
                     Circle()
                         .fill(modeStatusColor)
                         .frame(width: 7, height: 7)
-                    Text(appState.isNewAPIEnabled ? appState.newAPIServiceStatus.menuBarText : "直连")
+                    Text(appState.isNewAPIEnabled ? appState.newAPIServiceStatus.menuBarText : "手动直连")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -94,56 +94,58 @@ struct MenuBarView: View {
         }
     }
 
-    /// 直连模式只保留一个开启 NewAPI 的入口，不暴露 CPA 全局路由。
+    /// 直连模式只保留统一自动连接入口。
     private var directControls: some View {
         HStack(spacing: 12) {
+            Text("自动连接")
+                .frame(width: 100, alignment: .leading)
             Toggle(
-                "开启 NewAPI",
+                "",
                 isOn: Binding(
                     get: { appState.isNewAPIEnabled },
                     set: { enabled in Task { await appState.setNewAPIEnabled(enabled) } }
                 )
             )
+            .labelsHidden()
             .toggleStyle(.switch)
             .disabled(appState.isNewAPIOperationInProgress || appState.isCPAOperationInProgress || appState.isAccountSwitchInProgress)
-
-            Spacer()
-            Text("当前直连")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .frame(minHeight: 32)
     }
 
-    /// NewAPI 模式只显示统一出口、两个上游管理入口和同排退出入口。
+    /// NewAPI 模式展示总开关、两个独立服务开关、管理入口和退出入口。
     private var newAPIControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
+                Text("自动连接")
+                    .frame(width: 100, alignment: .leading)
                 Toggle(
-                    "NewAPI 统一出口",
+                    "",
                     isOn: Binding(
                         get: { appState.isNewAPIEnabled },
                         set: { enabled in Task { await appState.setNewAPIEnabled(enabled) } }
                     )
                 )
+                .labelsHidden()
                 .toggleStyle(.switch)
-                .disabled(appState.isNewAPIOperationInProgress || appState.isAccountSwitchInProgress)
+                .disabled(appState.isNewAPIOperationInProgress || appState.isCPAOperationInProgress || appState.isAccountSwitchInProgress)
                 Spacer()
             }
 
             HStack(spacing: 8) {
-                Text("CPA 上游")
-                    .font(.caption.weight(.medium))
-                Circle()
-                    .fill(cpaStatusColor)
-                    .frame(width: 7, height: 7)
-                Text(appState.cpaServiceStatus.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
+                Text("NewAPI")
+                    .frame(width: 100, alignment: .leading)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { appState.isNewAPIEnabled },
+                        set: { enabled in Task { await appState.setNewAPIEnabled(enabled) } }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(appState.isNewAPIOperationInProgress || appState.isCPAOperationInProgress)
 
-            HStack(spacing: 8) {
                 Button {
                     closeMenu()
                     Task { await appState.openNewAPIManagementPage() }
@@ -151,6 +153,21 @@ struct MenuBarView: View {
                     Label("管理 NewAPI", systemImage: "safari")
                 }
                 .disabled(appState.newAPIServiceStatus == .notInstalled || appState.isNewAPIOperationInProgress)
+            }
+
+            HStack(spacing: 8) {
+                Text("CPA")
+                    .frame(width: 100, alignment: .leading)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { appState.isCPAServiceEnabled },
+                        set: { enabled in Task { await appState.setCPAServiceEnabled(enabled) } }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(appState.isNewAPIOperationInProgress || appState.isCPAOperationInProgress)
 
                 Button {
                     closeMenu()
@@ -159,7 +176,9 @@ struct MenuBarView: View {
                     Label("管理 CPA", systemImage: "network")
                 }
                 .disabled(appState.cpaServiceStatus != .running || appState.isNewAPIOperationInProgress)
+            }
 
+            HStack {
                 Spacer()
 
                 Button {
@@ -173,16 +192,12 @@ struct MenuBarView: View {
             }
         }
         .buttonStyle(.plain)
-        .frame(minHeight: 64)
+        .frame(minHeight: 96)
     }
 
     /// 将排序、今日消耗和额度与 Token 刷新合并为一行高频控制。
     private var accountControls: some View {
         HStack(spacing: 10) {
-            Text(appState.isNewAPIEnabled || appState.isCPAEnabled ? "关闭统一出口后使用" : "当前直连账号")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
             Picker("排序", selection: $selectedSortOrder) {
                 ForEach(AccountSortOrder.allCases) { order in Text(order.rawValue).tag(order) }
             }
