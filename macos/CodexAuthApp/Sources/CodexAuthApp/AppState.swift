@@ -354,7 +354,9 @@ final class AppState: ObservableObject {
         isShuttingDown = true
         periodicRefreshTask?.cancel()
         initialTokenRefreshTask?.cancel()
-        await refreshLoopTask?.value
+        // 后台刷新可能卡在外部 CLI 或网络 I/O；退出只需取消它，不等待其完成，避免确认后主线程长期挂起。
+        refreshLoopTask?.cancel()
+        refreshLoopTask = nil
 
         if state?.globalRoute == .newapi {
             do {
