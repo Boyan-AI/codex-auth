@@ -61,7 +61,13 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.bordered)
                 Button("确认退出", role: .destructive) {
-                    Darwin.exit(0)
+                    // 先执行统一清理，最多等待三秒；服务异常时仍保证菜单栏 App 能退出。
+                    Task { @MainActor in
+                        let cleanup = Task { @MainActor in await appState.shutdown() }
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        cleanup.cancel()
+                        Darwin.exit(0)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
             }
