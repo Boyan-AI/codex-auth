@@ -339,8 +339,6 @@ final class AppState: ObservableObject {
         guard !isNewAPIOperationInProgress, !isCPAOperationInProgress, !isAccountSwitchInProgress else { return }
         isNewAPIOperationInProgress = true
         defer { isNewAPIOperationInProgress = false }
-        let activeRefresh = refreshLoopTask
-        await activeRefresh?.value
         if enabled {
             await enableNewAPI(showSuccessNotice: true)
         } else {
@@ -519,24 +517,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 尝试启动 CPA 作为 NewAPI 上游；CPA 失败只降级状态，不阻断 NewAPI。
+    /// 依次启动必需的 CPA 上游和 NewAPI；全部就绪后才提交全局路由。
     private func enableNewAPI(showSuccessNotice: Bool) async {
         errorMessage = nil
+        cpaServiceStatus = .starting
         newAPIServiceStatus = .starting
-        var cpaStartError: Error?
+
         do {
             _ = try await cpaRuntime.startAndValidate()
             cpaServiceStatus = .running
-        } catch {
-            cpaStartError = error
-            cpaServiceStatus = await cpaRuntime.status()
-        }
-
-        do {
-            if cpaStartError == nil {
-                try await newAPIRuntime.stop()
-                try await newAPIChannelProvisioner.configure()
-            }
+            try await newAPIRuntime.stop()
+            try await newAPIChannelProvisioner.configure()
             let configuration = try await newAPIRuntime.startAndValidate()
             let updatedState = try await client.enableNewAPIRoute(
                 baseURL: configuration.baseURL.absoluteString,
@@ -545,9 +536,7 @@ final class AppState: ObservableObject {
             await acceptAuthoritativeRouteState(updatedState)
             newAPIServiceStatus = .running
             if showSuccessNotice {
-                notice = cpaStartError == nil
-                    ? "NewAPI 已开启。新建 Codex 会话将统一使用 NewAPI。"
-                    : "NewAPI 已开启，但 CPA 上游未连接：\(cpaStartError!.localizedDescription)"
+                notice = "NewAPI 已开启。新建 Codex 会话将统一使用 NewAPI。"
             }
         } catch let enableError {
             do {
@@ -561,9 +550,7 @@ final class AppState: ObservableObject {
             await stopNewAPIIfNeeded()
             await stopCPAIfNeeded()
             newAPIServiceStatus = await newAPIRuntime.status()
-            errorMessage = cpaStartError == nil
-                ? "NewAPI 开启失败，已恢复直连：\(enableError.localizedDescription)"
-                : "NewAPI 开启失败，已恢复直连；CPA 上游也已停止：\(enableError.localizedDescription)"
+            errorMessage = "NewAPI 开启失败，已恢复直连：\(enableError.localizedDescription)"
         }
     }
 

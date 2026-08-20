@@ -347,6 +347,44 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(delays, [0, 0])
     }
 
+    /// 验证已加载且健康的 CPA 服务会被直接复用，不触发无意义的启停。
+    func testRuntimeReusesHealthyLoadedServiceWithoutRestart() async throws {
+        let service = StubCPAServiceController()
+        service.currentStatus = .running
+        let runtime = CPAServiceRuntime(
+            serviceController: service,
+            configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
+            healthChecker: SuccessfulCPAHealthChecker(),
+            contractChecker: AcceptingCPAContractChecker(),
+            browser: RecordingCPABrowser()
+        )
+
+        _ = try await runtime.startAndValidate()
+
+        XCTAssertTrue(service.calls.isEmpty)
+    }
+
+    /// 验证已加载但端口不健康的 CPA 服务会受控重启，并在恢复健康后返回成功。
+    func testRuntimeRestartsUnhealthyLoadedServiceBeforeWaitingForReadiness() async throws {
+        let service = StubCPAServiceController()
+        service.currentStatus = .running
+        let healthChecker = EventuallySuccessfulCPAHealthChecker(failuresBeforeSuccess: 1)
+        let runtime = CPAServiceRuntime(
+            serviceController: service,
+            configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
+            healthChecker: healthChecker,
+            contractChecker: AcceptingCPAContractChecker(),
+            browser: RecordingCPABrowser(),
+            startupRetryDelaysNanoseconds: [],
+            sleep: { _ in }
+        )
+
+        _ = try await runtime.startAndValidate()
+
+        XCTAssertEqual(service.calls, ["stop", "start"])
+        XCTAssertEqual(healthChecker.attempts, 2)
+    }
+
     /// 验证启动时先锁定固定服务契约，再发送客户端 Key 做模型健康检查。
     func testRuntimeValidatesContractBeforeClientKeyHealthCheck() async {
         let recorder = RuntimeValidationRecorder()

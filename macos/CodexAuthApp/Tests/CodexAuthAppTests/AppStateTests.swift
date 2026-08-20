@@ -34,7 +34,7 @@ final class AppStateTests: XCTestCase {
     }
 
     /// 验证 NewAPI 开启顺序为 CPA 就绪、停服配置渠道、NewAPI 就绪和路由写入。
-    func testEnableNewAPIStartsOptionalCPABeforeChangingNewAPIRoute() async {
+    func testEnableNewAPIStartsRequiredCPABeforeChangingNewAPIRoute() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
         let cpaRuntime = StubCPAServiceRuntime(operations: operations)
@@ -59,6 +59,40 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.isNewAPIEnabled)
         XCTAssertEqual(appState.newAPIServiceStatus, .running)
         XCTAssertEqual(appState.cpaServiceStatus, .running)
+    }
+
+    /// 验证额度后台刷新阻塞时，自动连接仍立即启动必需服务，不等待展示数据扫描。
+    func testEnableNewAPIDoesNotWaitForBlockedQuotaRefresh() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
+        client.recordsTokenUsageOperation = true
+        let tokenUsageGate = AsyncOperationGate()
+        client.tokenUsageGate = tokenUsageGate
+        let appState = AppState(
+            client: client,
+            cpaRuntime: StubCPAServiceRuntime(operations: operations),
+            newAPIRuntime: StubNewAPIServiceRuntime(operations: operations),
+            newAPIChannelProvisioner: StubNewAPICPAChannelProvisioner(operations: operations)
+        )
+
+        let refresh = Task { await appState.refreshOnPeriodicTimer() }
+        await tokenUsageGate.waitUntilSuspended()
+        let enable = Task { await appState.setNewAPIEnabled(true) }
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertEqual(operations.values, [
+            "token-scan",
+            "service-start",
+            "newapi-stop",
+            "newapi-provision",
+            "newapi-start",
+            "newapi-route-enable",
+        ])
+
+        await tokenUsageGate.resume()
+        await refresh.value
+        await enable.value
+        XCTAssertTrue(appState.isNewAPIEnabled)
     }
 
     /// 验证专属渠道同步失败时不切换 NewAPI 路由并停止已启动的 CPA。
@@ -92,8 +126,8 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
     }
 
-    /// 验证 CPA 上游失败时仍可启动 NewAPI，并向用户保留降级提示。
-    func testEnableNewAPIContinuesWhenCPAUpstreamFails() async {
+    /// 验证 CPA 上游失败时不启动或提交 NewAPI 路由，并保持手动直连。
+    func testEnableNewAPIRollsBackToDirectWhenRequiredCPAUpstreamFails() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
         let cpaRuntime = StubCPAServiceRuntime(operations: operations)
@@ -103,9 +137,17 @@ final class AppStateTests: XCTestCase {
 
         await appState.setNewAPIEnabled(true)
 
-        XCTAssertEqual(operations.values, ["service-start", "newapi-start", "newapi-route-enable"])
-        XCTAssertTrue(appState.isNewAPIEnabled)
-        XCTAssertTrue(appState.notice?.contains("CPA 上游未连接") == true)
+        XCTAssertEqual(operations.values, [
+            "service-start",
+            "newapi-route-disable",
+            "newapi-status",
+            "service-stop",
+            "newapi-status",
+        ])
+        XCTAssertFalse(appState.isNewAPIEnabled)
+        XCTAssertEqual(newAPIRuntime.currentStatus, .stopped)
+        XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
+        XCTAssertTrue(appState.errorMessage?.contains("CPA offline") == true)
     }
 
     /// 验证 NewAPI 关闭先恢复直连，再停 NewAPI 和 CPA。

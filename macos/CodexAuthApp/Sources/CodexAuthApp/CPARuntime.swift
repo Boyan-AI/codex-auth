@@ -870,10 +870,21 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         self.sleep = sleep
     }
 
-    /// 启动服务后先锁定配置契约，再用客户端 Key 检查模型端点；回滚由 AppState 编排。
+    /// 复用健康的已加载服务；端口异常时受控重启，再锁定配置契约并检查模型端点。
     func startAndValidate() async throws -> CPAConfiguration {
-        try await serviceController.start()
         let configuration = try configurationProvider.load()
+        if await serviceController.status() == .running {
+            do {
+                try await contractChecker.validate(configuration)
+                try await healthChecker.validate(configuration)
+                return configuration
+            } catch let error as CPARuntimeError {
+                guard case .unavailable = error else { throw error }
+                try await serviceController.stop()
+            }
+        }
+
+        try await serviceController.start()
         try await validateStartupReadiness(configuration)
         return configuration
     }
