@@ -6,11 +6,12 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$APP_DIR/../.." && pwd)"
 
 BUILD_ROOT="${CODEX_AUTH_APP_BUILD_ROOT:-${TMPDIR:-/tmp}/codex-auth-menu-app-build}"
-APP_BUNDLE="${CODEX_AUTH_APP_BUNDLE_PATH:-$BUILD_ROOT/Codex Auth.app}"
+APP_BUNDLE="${CODEX_AUTH_APP_BUNDLE_PATH:-$BUILD_ROOT/Codex Switch.app}"
 SWIFT_BUILD_DIR="$BUILD_ROOT/swift"
 ZIG_INSTALL_DIR="$BUILD_ROOT/zig-install"
 ZIG_CACHE_DIR="$BUILD_ROOT/zig-cache"
 ZIG_GLOBAL_CACHE_DIR="$BUILD_ROOT/zig-global-cache"
+ICON_SOURCE="$APP_DIR/Resources/AppIconSource.png"
 
 echo "Building codex-auth CLI..."
 zig build \
@@ -18,7 +19,7 @@ zig build \
   --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
   -p "$ZIG_INSTALL_DIR"
 
-echo "Building Codex Auth menu app..."
+echo "Building Codex Switch menu app..."
 swift build \
   --package-path "$APP_DIR" \
   --scratch-path "$SWIFT_BUILD_DIR" \
@@ -38,7 +39,7 @@ chmod +x \
   "$APP_BUNDLE/Contents/Resources/configure-newapi-cpa-channel.sh"
 
 echo "Generating app icon..."
-swift "$SCRIPT_DIR/generate-icon.swift" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+swift "$SCRIPT_DIR/generate-icon.swift" "$ICON_SOURCE" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -48,7 +49,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>zh_CN</string>
   <key>CFBundleDisplayName</key>
-  <string>Codex Auth</string>
+  <string>Codex Switch</string>
   <key>CFBundleExecutable</key>
   <string>CodexAuthApp</string>
   <key>CFBundleIdentifier</key>
@@ -58,7 +59,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Codex Auth</string>
+  <string>Codex Switch</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

@@ -124,7 +124,7 @@ final class StatusItemController: NSObject, ObservableObject {
         button.image = nil
         button.title = ""
         button.attributedTitle = NSAttributedString()
-        button.toolTip = "Codex Auth"
+        button.toolTip = "Codex Switch"
         button.target = self
         button.action = #selector(togglePopover(_:))
 

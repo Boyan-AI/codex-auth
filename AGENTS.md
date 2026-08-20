@@ -13,7 +13,7 @@ After modifying any `.zig` file, always run `zig build run -- list` to verify th
 # Desktop App Installation
 
 - Use `macos/CodexAuthApp/scripts/install-desktop-app.sh` as the single entry point for compiling, overwriting, launching, and verifying the desktop app on the user's Desktop.
-- When the user explicitly asks to install, reinstall, or overwrite the desktop app, that request authorizes the tool to quit the running desktop app, overwrite `~/Desktop/Codex Auth.app`, and relaunch it after normal code validation succeeds.
+- When the user explicitly asks to install, reinstall, or overwrite the desktop app, that request authorizes the tool to quit the running desktop app, overwrite `~/Desktop/Codex Switch.app`, and relaunch it after normal code validation succeeds.
 - When a completed desktop app change needs user verification but the user has not explicitly requested installation, explain that the running app will be quit and the Desktop copy overwritten, then wait for confirmation before running the tool.
 - Run this tool with the real user `HOME`; this is a scoped exception to Execution Isolation because its target is the real Desktop. Build and test commands outside this installation workflow must remain isolated.
 - Do not manually compose the build, quit, copy, launch, and process-check commands unless diagnosing a failure in the installation tool itself.

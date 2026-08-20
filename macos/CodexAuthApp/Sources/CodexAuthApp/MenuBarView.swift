@@ -48,7 +48,7 @@ struct MenuBarView: View {
     /// 在菜单栏弹窗内部展示退出确认，避免系统 confirmationDialog 阻塞无窗口 App。
     private var quitConfirmation: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("退出 Codex Auth？")
+            Text("退出 Codex Switch？")
                 .font(.headline)
             Text("退出前将停止 NewAPI 与 CPA。")
                 .font(.caption)
@@ -79,7 +79,7 @@ struct MenuBarView: View {
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Codex Auth")
+                Text("Codex Switch")
                     .font(.system(size: 20, weight: .semibold))
                 HStack(spacing: 6) {
                     Circle()

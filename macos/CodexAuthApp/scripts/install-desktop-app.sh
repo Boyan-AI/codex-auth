@@ -2,9 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_BUNDLE="$HOME/Desktop/Codex Auth.app"
+APP_BUNDLE="$HOME/Desktop/Codex Switch.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/CodexAuthApp"
 CLI_EXECUTABLE="$APP_BUNDLE/Contents/Resources/codex-auth"
+LEGACY_APP_BUNDLE="$HOME/Desktop/Codex Auth.app"
+LEGACY_APP_EXECUTABLE="$LEGACY_APP_BUNDLE/Contents/MacOS/CodexAuthApp"
+LEGACY_CLI_EXECUTABLE="$LEGACY_APP_BUNDLE/Contents/Resources/codex-auth"
 BUNDLE_ID="com.loongphy.codex-auth.menu"
 GRACEFUL_STOP_TIMEOUT_SECONDS=5
 TERM_STOP_TIMEOUT_SECONDS=3
@@ -25,10 +28,12 @@ process_ids_for_executable() {
   done < <(/bin/ps ax -o pid=,command=)
 }
 
-# 汇总桌面 App Bundle 内主程序和内置 CLI 的进程 ID。
+# 汇总新旧桌面 App Bundle 内主程序和内置 CLI 的进程 ID，确保更名升级时不会遗留旧进程。
 bundle_process_ids() {
   process_ids_for_executable "$APP_EXECUTABLE"
   process_ids_for_executable "$CLI_EXECUTABLE"
+  process_ids_for_executable "$LEGACY_APP_EXECUTABLE"
+  process_ids_for_executable "$LEGACY_CLI_EXECUTABLE"
 }
 
 # 判断桌面 App Bundle 是否仍有相关进程运行。

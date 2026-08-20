@@ -78,14 +78,14 @@ enum NewAPIRuntimeError: LocalizedError, Equatable {
     /// 返回可直接展示给本机管理员的错误说明。
     var errorDescription: String? {
         switch self {
-        case .missingAPIKey: return "尚未配置 NewAPI 调用 Token。请先在 NewAPI 网页创建 Token，再粘贴到 Codex Auth 设置。"
-        case .invalidAPIKey: return "NewAPI 调用 Token 无效，请在 Codex Auth 设置中更新。"
+        case .missingAPIKey: return "尚未配置 NewAPI 调用 Token。请先在 NewAPI 网页创建 Token，再粘贴到 Codex Switch 设置。"
+        case .invalidAPIKey: return "NewAPI 调用 Token 无效，请在 Codex Switch 设置中更新。"
         case .setupRequired: return "NewAPI 尚未初始化，请先在管理网页创建管理员。"
         case .missingInstalledConfiguration: return "尚未安装 NewAPI 运行配置。"
         case .missingLaunchAgent: return "尚未安装 NewAPI 用户级服务。"
         case .invalidInstalledConfiguration(let reason): return "NewAPI 运行配置无效：\(reason)"
         case .invalidBaseURL(let value): return "NewAPI 地址无效：\(value)"
-        case .nonLocalBaseURL(let value): return "Codex Auth 只接管本机 NewAPI 地址：\(value)"
+        case .nonLocalBaseURL(let value): return "Codex Switch 只接管本机 NewAPI 地址：\(value)"
         case .incompatibleConfiguration(let reason): return "NewAPI 配置不兼容：\(reason)"
         case .serviceCommandFailed(let reason): return "NewAPI 服务控制失败：\(reason)"
         case .unavailable(let reason): return "NewAPI 当前不可用：\(reason)"

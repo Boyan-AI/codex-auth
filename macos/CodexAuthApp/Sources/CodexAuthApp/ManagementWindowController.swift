@@ -172,7 +172,7 @@ private struct ManagementRootView: View {
                 Label(section.title, systemImage: section.systemImage)
                     .tag(section)
             }
-            .navigationTitle("Codex Auth")
+            .navigationTitle("Codex Switch")
             .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 190)
         } detail: {
             selectedPage
