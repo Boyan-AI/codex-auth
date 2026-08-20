@@ -377,7 +377,8 @@ final class AppState: ObservableObject {
                 return false
             }
         }
-        let newAPIStopError = await stopNewAPIIfNeeded()
+        // 退出路径只发送停服命令，不做 NewAPI 网络健康检查，避免异常服务阻塞退出确认。
+        let newAPIStopError = await stopNewAPIForShutdown()
         let cpaStopError = await stopCPAIfNeeded()
         if let newAPIStopError {
             errorMessage = "退出前停止 NewAPI 失败：\(newAPIStopError.localizedDescription)"
@@ -390,6 +391,19 @@ final class AppState: ObservableObject {
             return false
         }
         return true
+    }
+
+    /// 退出时直接停止 NewAPI；服务控制器自身保证未安装或已停止时幂等返回。
+    @discardableResult
+    private func stopNewAPIForShutdown() async -> Error? {
+        do {
+            try await newAPIRuntime.stop()
+            newAPIServiceStatus = .stopped
+            return nil
+        } catch {
+            newAPIServiceStatus = .unavailable
+            return error
+        }
     }
 
     /// 先启动并校验服务，再提交全局 CPA 路由；任一步失败都恢复直连并停服。

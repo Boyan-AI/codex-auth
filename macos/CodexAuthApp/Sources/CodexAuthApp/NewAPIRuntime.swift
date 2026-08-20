@@ -512,6 +512,7 @@ struct LaunchAgentNewAPIServiceController: NewAPIServiceControlling {
 
     /// 先移出服务再禁用自动启动；未加载状态按幂等成功处理。
     func stop() async throws {
+        guard fileExists(launchAgentURL) else { return }
         let bootout = try await runner.run(arguments: ["bootout", serviceTarget])
         let disable = try await runner.run(arguments: ["disable", serviceTarget])
         guard disable.exitCode == 0 else { throw serviceError(disable) }

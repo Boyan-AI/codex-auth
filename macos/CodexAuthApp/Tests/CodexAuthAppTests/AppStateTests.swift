@@ -121,7 +121,7 @@ final class AppStateTests: XCTestCase {
         let canTerminate = await appState.shutdown()
 
         XCTAssertTrue(canTerminate)
-        XCTAssertEqual(operations.values, ["newapi-route-disable", "newapi-status", "newapi-stop", "newapi-status", "service-stop"])
+        XCTAssertEqual(operations.values, ["newapi-route-disable", "newapi-stop", "service-stop"])
         XCTAssertFalse(appState.isNewAPIEnabled)
         XCTAssertEqual(appState.newAPIServiceStatus, .stopped)
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
@@ -139,7 +139,7 @@ final class AppStateTests: XCTestCase {
         let canTerminate = await appState.shutdown()
 
         XCTAssertTrue(canTerminate)
-        XCTAssertEqual(operations.values, ["newapi-status", "service-stop"])
+        XCTAssertEqual(operations.values, ["newapi-stop", "service-stop"])
         XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
     }
 
