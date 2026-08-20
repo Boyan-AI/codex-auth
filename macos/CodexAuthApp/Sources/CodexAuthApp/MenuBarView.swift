@@ -9,6 +9,7 @@ struct MenuBarView: View {
     @State private var isShowingTokenUsage = false
     @State private var selectedSortOrder: AccountSortOrder = .added
     @State private var isShowingDisableConfirmation = false
+    @State private var isShowingQuitConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -28,6 +29,9 @@ struct MenuBarView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if isShowingQuitConfirmation {
+                quitConfirmation
+            }
         }
         .padding(14)
         .frame(width: 420)
@@ -43,6 +47,30 @@ struct MenuBarView: View {
         } message: {
             Text("将先恢复直连，再停止 NewAPI 和 CPA。")
         }
+    }
+
+    /// 在菜单栏弹窗内部展示退出确认，避免系统 confirmationDialog 阻塞无窗口 App。
+    private var quitConfirmation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("退出 Codex Auth？")
+                .font(.headline)
+            Text("退出前将停止 NewAPI 与 CPA。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("取消") {
+                    isShowingQuitConfirmation = false
+                }
+                .buttonStyle(.bordered)
+                Button("确认退出", role: .destructive) {
+                    Darwin.exit(0)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
     /// 展示产品名、当前模式和可读服务状态。
@@ -152,7 +180,7 @@ struct MenuBarView: View {
 
             Button {
                 // 菜单栏 App 的确认弹窗回调不稳定，退出入口直接结束进程。
-                Darwin.exit(0)
+                isShowingQuitConfirmation = true
             } label: {
                 Label("退出", systemImage: "power")
             }
@@ -228,7 +256,7 @@ struct MenuBarView: View {
             footerButton("管理", systemImage: "person.2", section: .accounts)
             footerButton("统计", systemImage: "chart.bar", section: .usage)
             footerButton("设置", systemImage: "gearshape", section: .settings)
-            Button { Darwin.exit(0) } label: {
+            Button { isShowingQuitConfirmation = true } label: {
                 footerLabel("退出", systemImage: "power")
             }
             .frame(maxWidth: .infinity)
