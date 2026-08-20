@@ -5,7 +5,6 @@ import SwiftUI
 enum ManagementSection: String, CaseIterable, Identifiable {
     case accounts
     case addAccount
-    case routing
     case usage
     case settings
 
@@ -13,7 +12,7 @@ enum ManagementSection: String, CaseIterable, Identifiable {
 
     /// 仅返回应该出现在窗口侧栏中的稳定页面。
     static var sidebarCases: [ManagementSection] {
-        [.accounts, .routing, .usage, .settings]
+        [.accounts, .usage, .settings]
     }
 
     /// 将“添加账号”入口归一到账号页，并通过 sheet 表达具体动作。
@@ -25,8 +24,6 @@ enum ManagementSection: String, CaseIterable, Identifiable {
         switch self {
         case .accounts, .addAccount:
             return "账号"
-        case .routing:
-            return "路由"
         case .usage:
             return "统计"
         case .settings:
@@ -38,8 +35,6 @@ enum ManagementSection: String, CaseIterable, Identifiable {
         switch self {
         case .accounts, .addAccount:
             return "person.2"
-        case .routing:
-            return "point.3.connected.trianglepath.dotted"
         case .usage:
             return "chart.bar"
         case .settings:
@@ -163,7 +158,7 @@ final class ManagementWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// 提供账号、路由、统计和设置四个页面的统一侧栏。
+/// 提供账号、统计和设置页面的统一侧栏。
 private struct ManagementRootView: View {
     @State private var selection: ManagementSection
 
@@ -190,106 +185,10 @@ private struct ManagementRootView: View {
         switch selection {
         case .accounts, .addAccount:
             ManageAccountsView()
-        case .routing:
-            RoutingManagementView()
         case .usage:
             UsageManagementView()
         case .settings:
             SettingsManagementView()
-        }
-    }
-}
-
-/// 展示 NewAPI 统一出口、CPA 上游状态和两个原生管理页入口。
-private struct RoutingManagementView: View {
-    @EnvironmentObject private var appState: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(appState.isNewAPIEnabled ? "NewAPI 服务" : "NewAPI 统一出口")
-                        .font(.title2.weight(.semibold))
-                    Text(appState.isNewAPIEnabled ? appState.newAPIServiceStatus.label : "直连模式")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Toggle(
-                    "NewAPI",
-                    isOn: Binding(
-                        get: { appState.isNewAPIEnabled },
-                        set: { enabled in Task { await appState.setNewAPIEnabled(enabled) } }
-                    )
-                )
-                .toggleStyle(.switch)
-                .disabled(appState.isNewAPIOperationInProgress || appState.isAccountSwitchInProgress)
-            }
-
-            Divider()
-
-            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
-                GridRow {
-                    Text("NewAPI 地址")
-                    Text("http://127.0.0.1:3000")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                GridRow {
-                    Text("CPA 地址")
-                    Text("http://127.0.0.1:8317")
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                GridRow {
-                    Text("当前路由")
-                    Text(appState.isNewAPIEnabled ? "NewAPI" : "直连")
-                        .foregroundStyle(.secondary)
-                }
-                GridRow {
-                    Text("备用连接")
-                    Text(appState.state?.activeAccount?.primaryLabel ?? "未选择")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack {
-                Button {
-                    Task {
-                        await appState.refreshNewAPIServiceStatus()
-                        await appState.refreshCPAServiceStatus()
-                    }
-                } label: {
-                    Label("刷新状态", systemImage: "arrow.clockwise")
-                }
-                Button {
-                    appState.copyCPAManagementKey()
-                } label: {
-                    Label("复制 CPAMP 管理员密钥", systemImage: "doc.on.doc")
-                }
-                .disabled(appState.cpaServiceStatus == .notInstalled || appState.isCPAOperationInProgress)
-                Spacer()
-                Button {
-                    Task { await appState.openNewAPIManagementPage() }
-                } label: {
-                    Label("打开 NewAPI 管理页", systemImage: "safari")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(appState.newAPIServiceStatus == .notInstalled || appState.isNewAPIOperationInProgress)
-                Button {
-                    Task { await appState.openCPAManagementPage() }
-                } label: {
-                    Label("打开 CPA 管理页", systemImage: "network")
-                }
-                .disabled(appState.cpaServiceStatus != .running || appState.isNewAPIOperationInProgress)
-            }
-
-            Spacer()
-        }
-        .padding(24)
-        .navigationTitle("路由")
-        .task {
-            await appState.refreshNewAPIServiceStatus()
-            await appState.refreshCPAServiceStatus()
         }
     }
 }
@@ -319,8 +218,6 @@ private struct UsageManagementView: View {
 /// 仅保留真正可编辑的额度代理，并用简短说明标注生效范围。
 private struct SettingsManagementView: View {
     @EnvironmentObject private var appState: AppState
-    @AppStorage(QuotaProxyConfiguration.userDefaultsKey) private var savedQuotaProxyURL = ""
-    @State private var quotaProxyDraft = ""
     @State private var newAPITokenDraft = ""
 
     var body: some View {
@@ -341,7 +238,6 @@ private struct SettingsManagementView: View {
                         .disabled(appState.newAPIServiceStatus == .notInstalled)
                         Button("保存 Token") {
                             let token = newAPITokenDraft
-                            newAPITokenDraft = ""
                             Task { await appState.saveNewAPIToken(token) }
                         }
                         .buttonStyle(.borderedProminent)
@@ -350,79 +246,12 @@ private struct SettingsManagementView: View {
                 }
             }
 
-            Section("额度刷新代理") {
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("例如 http://127.0.0.1:7897", text: $quotaProxyDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(saveProxy)
-
-                    HStack {
-                        Text(proxyStatusText)
-                            .font(.caption)
-                            .foregroundStyle(isProxyInvalid ? Color.red : Color.secondary)
-                        Spacer()
-                        Button("清除", action: clearProxy)
-                            .disabled(savedQuotaProxyURL.isEmpty && normalizedProxyDraft.isEmpty)
-                        Button("保存", action: saveProxy)
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!canSaveProxy)
-                    }
-                }
-            }
-
-            Section("生效范围") {
-                LabeledContent("用途", value: "仅账号额度刷新")
-                LabeledContent("未配置时", value: "使用系统网络")
-                LabeledContent("不会影响", value: "CPA 与官方 CLI 会话")
-            }
         }
         .formStyle(.grouped)
         .padding(16)
         .navigationTitle("设置")
         .onAppear {
-            quotaProxyDraft = savedQuotaProxyURL
             Task { await appState.refreshNewAPIServiceStatus() }
         }
-    }
-
-    private var normalizedProxyDraft: String {
-        quotaProxyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var isProxyInvalid: Bool {
-        !normalizedProxyDraft.isEmpty &&
-            QuotaProxyConfiguration.environment(proxyURL: normalizedProxyDraft) == nil
-    }
-
-    private var canSaveProxy: Bool {
-        !normalizedProxyDraft.isEmpty &&
-            !isProxyInvalid &&
-            normalizedProxyDraft != savedQuotaProxyURL
-    }
-
-    private var proxyStatusText: String {
-        if isProxyInvalid {
-            return "地址格式无效，支持 http、https、socks5 和 socks5h"
-        }
-        if normalizedProxyDraft == savedQuotaProxyURL, !savedQuotaProxyURL.isEmpty {
-            return "已保存"
-        }
-        if normalizedProxyDraft.isEmpty {
-            return "未配置"
-        }
-        return "修改后点击保存"
-    }
-
-    /// 校验通过后一次性持久化代理，避免输入过程立即影响后台刷新。
-    private func saveProxy() {
-        guard canSaveProxy else { return }
-        savedQuotaProxyURL = normalizedProxyDraft
-        quotaProxyDraft = normalizedProxyDraft
-    }
-
-    /// 同时清空编辑值和已保存值，恢复使用系统网络。
-    private func clearProxy() {
-        quotaProxyDraft = ""
-        savedQuotaProxyURL = ""
     }
 }
