@@ -106,6 +106,7 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels WHERE na
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT type || '|' || key || '|' || status || '|' || base_url || '|' || models || '|' || \"group\" FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1|first-secret|1|http://127.0.0.1:8317|${EXPECTED_MODEL}|default" "Managed channel fields"
 managed_id="$(/usr/bin/sqlite3 "${db}" "SELECT id FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT \"group\" || '|' || model || '|' || channel_id || '|' || enabled FROM abilities WHERE channel_id=${managed_id};")" "default|${EXPECTED_MODEL}|${managed_id}|1" "Managed ability fields"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Managed channel JSON storage"
 assert_not_contains "${output}" "first-secret" "Create output"
 
 # 用户自建的同地址渠道不能被自动渠道认领或覆盖。
@@ -114,6 +115,7 @@ printf '%s\n' '{"base_url":"http://127.0.0.1:8317/v1","api_key":"second-secret"}
 output="$(run_configurator "${fixture}")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT key || '|' || models || '|' || remark FROM channels WHERE name='User CPA';")" "user-secret|user-model|User managed" "User channel preservation"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT key FROM channels WHERE id=${managed_id};")" "second-secret" "Managed key refresh"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Updated channel JSON storage"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1" "Idempotent managed channel count"
 assert_not_contains "${output}" "second-secret" "Update output"
 

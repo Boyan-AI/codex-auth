@@ -46,6 +46,8 @@ The SQLite database belongs to NewAPI and closes with the NewAPI process. There 
 
 When NewAPI is enabled, Codex Auth stops NewAPI before touching its SQLite database, verifies the pinned runtime schema, and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and exposes the managed Codex model. A user-created channel is never adopted by matching its URL or Key. Schema drift or ambiguous application-owned rows fail closed before the Codex route changes.
 
+The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather than a plain SQLite text value. The managed-channel configurator therefore stores its empty channel metadata as a valid JSON BLOB; this keeps both the native channel page and the distributor's channel lookup compatible with the release schema.
+
 Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
 
 ## Lifecycle

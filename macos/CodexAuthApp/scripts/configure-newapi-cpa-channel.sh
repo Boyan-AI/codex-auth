@@ -133,6 +133,8 @@ WHERE c.id = ${managed_id}
   AND c.base_url = '${CHANNEL_BASE_URL}'
   AND c.models = '${MANAGED_MODEL}'
   AND c."group" = '${MANAGED_GROUP}'
+  AND typeof(c.channel_info) = 'blob'
+  AND json_valid(c.channel_info)
   AND COALESCE(c.priority, 0) = 0
   AND COALESCE(c.weight, 0) = 0
   AND (SELECT COUNT(*) FROM abilities a WHERE a.channel_id = c.id) = 1
@@ -170,7 +172,8 @@ SET type = 1,
     "group" = '${MANAGED_GROUP}',
     priority = 0,
     auto_ban = 1,
-    remark = '${MANAGED_REMARK}'
+    remark = '${MANAGED_REMARK}',
+    channel_info = CAST('{}' AS BLOB)
 WHERE id = ${managed_id};
 DELETE FROM abilities WHERE channel_id = ${managed_id};
 INSERT INTO abilities("group", model, channel_id, enabled, priority, weight, tag)
@@ -187,7 +190,7 @@ INSERT INTO channels(
 ) VALUES(
     1, CAST(X'${key_hex}' AS TEXT), 1, '${MANAGED_NAME}', 0, ${now},
     '${CHANNEL_BASE_URL}', '${MANAGED_MODEL}', '${MANAGED_GROUP}',
-    0, 0, 1, '', NULL, '${MANAGED_REMARK}', '{}', ''
+    0, 0, 1, '', NULL, '${MANAGED_REMARK}', CAST('{}' AS BLOB), ''
 );
 INSERT INTO abilities("group", model, channel_id, enabled, priority, weight, tag)
 VALUES('${MANAGED_GROUP}', '${MANAGED_MODEL}', last_insert_rowid(), 1, 0, 0, NULL);
