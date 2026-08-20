@@ -86,7 +86,7 @@ final class NewAPIRuntimeTests: XCTestCase {
                 return try Self.response(for: request, statusCode: 200, body: #"{"success":true,"data":{"status":true}}"#)
             case "/v1/models":
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-local-token")
-                return try Self.response(for: request, statusCode: 200, body: #"{"data":[{"id":"gpt-5"}]}"#)
+                return try Self.response(for: request, statusCode: 200, body: #"{"data":[{"id":"gpt-5.6-sol"}]}"#)
             default:
                 return try Self.response(for: request, statusCode: 404, body: "{}")
             }
@@ -99,6 +99,51 @@ final class NewAPIRuntimeTests: XCTestCase {
         try await checker.validateAPIKey(configuration)
 
         XCTAssertEqual(requestedPaths, ["/api/status", "/api/setup", "/v1/models"])
+    }
+
+    /// 验证模型目录不含受管模型时不能仅凭 HTTP 200 误报可用。
+    func testURLSessionHealthCheckerRejectsMissingManagedModel() async throws {
+        let checker = URLSessionNewAPIHealthChecker(session: makeURLSession())
+        RecordingNewAPIURLProtocol.handler = { request in
+            try Self.response(for: request, statusCode: 200, body: #"{"data":[{"id":"gpt-5"}]}"#)
+        }
+
+        do {
+            try await checker.validateAPIKey(try makeConfiguration())
+            XCTFail("Expected missing managed model")
+        } catch {
+            XCTAssertEqual(
+                error as? NewAPIRuntimeError,
+                .managedModelUnavailable(NewAPIModelCatalog.managedModel)
+            )
+        }
+    }
+
+    /// 验证打包配置器通过固定脚本路径运行，并把错误输出映射为运行时错误。
+    func testBundledCPAChannelProvisionerRunsScriptAndMapsFailure() async throws {
+        let runner = RecordingNewAPIProvisionerCommandRunner()
+        runner.result = CommandResult(
+            exitCode: 78,
+            standardOutput: Data(),
+            standardError: Data("schema mismatch\n".utf8)
+        )
+        let provisioner = BundledNewAPICPAChannelProvisioner(
+            runner: runner,
+            scriptURL: URL(fileURLWithPath: "/tmp/configure-newapi-cpa-channel.sh"),
+            scriptIsExecutable: { _ in true }
+        )
+
+        do {
+            try await provisioner.configure()
+            XCTFail("Expected provisioning failure")
+        } catch {
+            XCTAssertEqual(
+                error as? NewAPIRuntimeError,
+                .managedCPAChannelConfigurationFailed("schema mismatch")
+            )
+        }
+        XCTAssertEqual(runner.executableURLs.map(\.path), ["/tmp/configure-newapi-cpa-channel.sh"])
+        XCTAssertEqual(runner.arguments, [[]])
     }
 
     /// 验证模型端点的认证拒绝会映射为 Token 无效。
@@ -276,6 +321,24 @@ private final class RecordingNewAPIServiceCommandRunner: NewAPIServiceCommandRun
         self.arguments.append(arguments)
         let exitCode = exitCodes.isEmpty ? 0 : exitCodes.removeFirst()
         return CommandResult(exitCode: exitCode, standardOutput: Data(), standardError: Data())
+    }
+}
+
+/// 记录专属渠道配置脚本调用并返回固定结果。
+private final class RecordingNewAPIProvisionerCommandRunner: CommandRunning {
+    var executableURLs: [URL] = []
+    var arguments: [[String]] = []
+    var result = CommandResult(exitCode: 0, standardOutput: Data(), standardError: Data())
+
+    /// 返回预设命令结果。
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]?
+    ) async throws -> CommandResult {
+        executableURLs.append(executableURL)
+        self.arguments.append(arguments)
+        return result
     }
 }
 

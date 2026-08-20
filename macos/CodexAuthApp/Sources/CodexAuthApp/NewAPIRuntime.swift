@@ -71,6 +71,8 @@ enum NewAPIRuntimeError: LocalizedError, Equatable {
     case incompatibleConfiguration(String)
     case serviceCommandFailed(String)
     case unavailable(String)
+    case managedModelUnavailable(String)
+    case managedCPAChannelConfigurationFailed(String)
     case browserOpenFailed
 
     /// 返回可直接展示给本机管理员的错误说明。
@@ -87,6 +89,8 @@ enum NewAPIRuntimeError: LocalizedError, Equatable {
         case .incompatibleConfiguration(let reason): return "NewAPI 配置不兼容：\(reason)"
         case .serviceCommandFailed(let reason): return "NewAPI 服务控制失败：\(reason)"
         case .unavailable(let reason): return "NewAPI 当前不可用：\(reason)"
+        case .managedModelUnavailable(let model): return "NewAPI 没有可用于默认分组的 \(model) 渠道。"
+        case .managedCPAChannelConfigurationFailed(let reason): return "NewAPI 的 CPA 默认渠道配置失败：\(reason)"
         case .browserOpenFailed: return "无法使用系统浏览器打开 NewAPI 管理页。"
         }
     }
@@ -342,7 +346,10 @@ struct URLSessionNewAPIHealthChecker: NewAPIHealthChecking {
             guard (200..<300).contains(http.statusCode) else {
                 throw NewAPIRuntimeError.unavailable("模型接口 HTTP \(http.statusCode)")
             }
-            _ = try NewAPIModelCatalog.decode(data)
+            let catalog = try NewAPIModelCatalog.decode(data)
+            guard catalog.modelIDs.contains(NewAPIModelCatalog.managedModel) else {
+                throw NewAPIRuntimeError.managedModelUnavailable(NewAPIModelCatalog.managedModel)
+            }
         } catch let error as NewAPIRuntimeError {
             throw error
         } catch {
@@ -371,6 +378,8 @@ struct URLSessionNewAPIHealthChecker: NewAPIHealthChecking {
 
 /// 保存健康检查所需的最小 NewAPI 模型目录。
 struct NewAPIModelCatalog: Equatable {
+    static let managedModel = "gpt-5.6-sol"
+
     let modelIDs: [String]
 
     /// 解码 OpenAI 兼容模型列表并忽略空白标识。
@@ -383,6 +392,52 @@ struct NewAPIModelCatalog: Equatable {
 
     private struct Response: Decodable { let data: [Model] }
     private struct Model: Decodable { let id: String }
+}
+
+/// 定义在 NewAPI 停止期间同步应用专属 CPA 渠道的能力。
+protocol NewAPICPAChannelProvisioning {
+    func configure() async throws
+}
+
+/// 调用 App Bundle 内经过版本固定的配置器，不向命令参数传递任何密钥。
+struct BundledNewAPICPAChannelProvisioner: NewAPICPAChannelProvisioning {
+    let runner: CommandRunning
+    let scriptURL: URL
+    let scriptIsExecutable: (URL) -> Bool
+
+    init(
+        runner: CommandRunning = ProcessCommandRunner(),
+        scriptURL: URL = Bundle.main.resourceURL?
+            .appendingPathComponent("configure-newapi-cpa-channel.sh")
+            ?? URL(fileURLWithPath: "/nonexistent/configure-newapi-cpa-channel.sh"),
+        scriptIsExecutable: @escaping (URL) -> Bool = {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }
+    ) {
+        self.runner = runner
+        self.scriptURL = scriptURL
+        self.scriptIsExecutable = scriptIsExecutable
+    }
+
+    /// 执行无参数配置器，并把稳定错误输出映射为桌面运行时错误。
+    func configure() async throws {
+        guard scriptIsExecutable(scriptURL) else {
+            throw NewAPIRuntimeError.managedCPAChannelConfigurationFailed("配置器缺失或不可执行")
+        }
+        do {
+            let result = try await runner.run(executableURL: scriptURL, arguments: [])
+            guard result.exitCode == 0 else {
+                let stderr = String(data: result.standardError, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let reason = stderr?.isEmpty == false ? stderr! : "配置器退出码为 \(result.exitCode)"
+                throw NewAPIRuntimeError.managedCPAChannelConfigurationFailed(reason)
+            }
+        } catch let error as NewAPIRuntimeError {
+            throw error
+        } catch {
+            throw NewAPIRuntimeError.managedCPAChannelConfigurationFailed(error.localizedDescription)
+        }
+    }
 }
 
 /// 对应 NewAPI 匿名状态响应的必要字段。

@@ -28,6 +28,7 @@ final class AppState: ObservableObject {
     private let client: CodexAuthClientProtocol
     private let cpaRuntime: CPAServiceRuntimeProtocol
     private let newAPIRuntime: NewAPIServiceRuntimeProtocol
+    private let newAPIChannelProvisioner: NewAPICPAChannelProvisioning
     private let usageAlertPresenter: UsageAlertPresenting
     private var usageAlertTracker = UsageAlertTracker()
     private var didRefreshOnAppLaunch = false
@@ -47,11 +48,13 @@ final class AppState: ObservableObject {
         client: CodexAuthClientProtocol = CodexAuthCLIClient(),
         cpaRuntime: CPAServiceRuntimeProtocol = CPAServiceRuntime(),
         newAPIRuntime: NewAPIServiceRuntimeProtocol = NewAPIServiceRuntime(),
+        newAPIChannelProvisioner: NewAPICPAChannelProvisioning = BundledNewAPICPAChannelProvisioner(),
         usageAlertPresenter: UsageAlertPresenting? = nil
     ) {
         self.client = client
         self.cpaRuntime = cpaRuntime
         self.newAPIRuntime = newAPIRuntime
+        self.newAPIChannelProvisioner = newAPIChannelProvisioner
         self.usageAlertPresenter = usageAlertPresenter ?? DisabledUsageAlertPresenter()
         self.deletedAccounts = DeletedAccountStore.load()
     }
@@ -439,6 +442,10 @@ final class AppState: ObservableObject {
         }
 
         do {
+            if cpaStartError == nil {
+                try await newAPIRuntime.stop()
+                try await newAPIChannelProvisioner.configure()
+            }
             let configuration = try await newAPIRuntime.startAndValidate()
             let updatedState = try await client.enableNewAPIRoute(
                 baseURL: configuration.baseURL.absoluteString,

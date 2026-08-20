@@ -8,7 +8,7 @@ This document defines the local macOS workbench that combines Codex Auth, NewAPI
 - NewAPI is the unified API exit. It owns channels, users, distributed Tokens, quotas, and routing policy through its native web UI.
 - CPA is one optional NewAPI upstream. It converts subscription accounts and OAuth sessions into an OpenAI-compatible local API.
 - CPA Manager Plus (CPAMP) is the local CPA management page service. Codex Auth starts it only when the CPA management page is opened and stops it with the other managed services.
-- Codex Auth does not copy or reconcile NewAPI users/channels or CPA accounts. Each service keeps its own data boundary.
+- Codex Auth does not copy or reconcile NewAPI users or CPA accounts. It owns exactly one explicitly marked NewAPI channel named `Codex Auth CPA`, which connects the managed local CPA as the default upstream. Other NewAPI channels remain user-owned.
 
 New Codex processes use one of these routes:
 
@@ -43,6 +43,8 @@ The SQLite database belongs to NewAPI and closes with the NewAPI process. There 
 4. Create a NewAPI Token in the native UI.
 5. Paste that Token once into Codex Auth settings and save it.
 6. Enable NewAPI from the menu bar.
+
+When NewAPI is enabled, Codex Auth stops NewAPI before touching its SQLite database, verifies the pinned runtime schema, and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and exposes the managed Codex model. A user-created channel is never adopted by matching its URL or Key. Schema drift or ambiguous application-owned rows fail closed before the Codex route changes.
 
 Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
 

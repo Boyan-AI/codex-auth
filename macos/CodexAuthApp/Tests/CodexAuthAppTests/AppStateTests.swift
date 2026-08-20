@@ -17,20 +17,63 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .running)
     }
 
-    /// 验证 NewAPI 开启顺序为 CPA 尝试启动、NewAPI 就绪、最后写入统一路由。
+    /// 验证 NewAPI 开启顺序为 CPA 就绪、停服配置渠道、NewAPI 就绪和路由写入。
     func testEnableNewAPIStartsOptionalCPABeforeChangingNewAPIRoute() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
         let cpaRuntime = StubCPAServiceRuntime(operations: operations)
         let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations)
-        let appState = AppState(client: client, cpaRuntime: cpaRuntime, newAPIRuntime: newAPIRuntime)
+        let provisioner = StubNewAPICPAChannelProvisioner(operations: operations)
+        let appState = AppState(
+            client: client,
+            cpaRuntime: cpaRuntime,
+            newAPIRuntime: newAPIRuntime,
+            newAPIChannelProvisioner: provisioner
+        )
 
         await appState.setNewAPIEnabled(true)
 
-        XCTAssertEqual(operations.values, ["service-start", "newapi-start", "newapi-route-enable"])
+        XCTAssertEqual(operations.values, [
+            "service-start",
+            "newapi-stop",
+            "newapi-provision",
+            "newapi-start",
+            "newapi-route-enable",
+        ])
         XCTAssertTrue(appState.isNewAPIEnabled)
         XCTAssertEqual(appState.newAPIServiceStatus, .running)
         XCTAssertEqual(appState.cpaServiceStatus, .running)
+    }
+
+    /// 验证专属渠道同步失败时不切换 NewAPI 路由并停止已启动的 CPA。
+    func testEnableNewAPIProvisioningFailureRollsBackWithoutEnablingRoute() async {
+        let operations = OperationRecorder()
+        let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
+        let cpaRuntime = StubCPAServiceRuntime(operations: operations)
+        let newAPIRuntime = StubNewAPIServiceRuntime(operations: operations)
+        let provisioner = StubNewAPICPAChannelProvisioner(operations: operations)
+        provisioner.error = NewAPIRuntimeError.managedCPAChannelConfigurationFailed("fixture failure")
+        let appState = AppState(
+            client: client,
+            cpaRuntime: cpaRuntime,
+            newAPIRuntime: newAPIRuntime,
+            newAPIChannelProvisioner: provisioner
+        )
+
+        await appState.setNewAPIEnabled(true)
+
+        XCTAssertEqual(operations.values, [
+            "service-start",
+            "newapi-stop",
+            "newapi-provision",
+            "newapi-route-disable",
+            "newapi-status",
+            "service-stop",
+            "newapi-status",
+        ])
+        XCTAssertFalse(appState.isNewAPIEnabled)
+        XCTAssertEqual(newAPIRuntime.currentStatus, .stopped)
+        XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
     }
 
     /// 验证 CPA 上游失败时仍可启动 NewAPI，并向用户保留降级提示。
@@ -680,6 +723,22 @@ final class StubNewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
     }
 
     func saveAPIKey(_ apiKey: String) throws {}
+}
+
+/// 记录应用专属 CPA 渠道同步并允许注入失败。
+final class StubNewAPICPAChannelProvisioner: NewAPICPAChannelProvisioning {
+    var operations: OperationRecorder?
+    var error: Error?
+
+    init(operations: OperationRecorder? = nil) {
+        self.operations = operations
+    }
+
+    /// 记录同步调用并抛出预设错误。
+    func configure() async throws {
+        operations?.values.append("newapi-provision")
+        if let error { throw error }
+    }
 }
 
 /// 在异步测试中暂停指定操作，直到测试显式继续。
