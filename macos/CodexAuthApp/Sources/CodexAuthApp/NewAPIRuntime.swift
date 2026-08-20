@@ -35,7 +35,7 @@ enum NewAPIServiceStatus: Equatable {
     /// 返回收起菜单栏时使用的短状态，确保 NewAPI 模式不依赖颜色表达健康度。
     var menuBarText: String {
         switch self {
-        case .running: return "NewAPI · 已连接"
+        case .running: return "自动"
         case .starting: return "NewAPI · 启动中"
         case .setupRequired: return "NewAPI · 待初始化"
         case .tokenRequired: return "NewAPI · 缺 Token"

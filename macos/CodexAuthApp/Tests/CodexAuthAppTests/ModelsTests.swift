@@ -412,7 +412,7 @@ final class ModelsTests: XCTestCase {
             newAPIServiceStatus: .running
         )
 
-        XCTAssertEqual(presentation.statusBarButtonText, "NewAPI · 已连接")
+        XCTAssertEqual(presentation.statusBarButtonText, "自动")
         XCTAssertEqual(presentation.segments.map(\.tone), [.available])
     }
 

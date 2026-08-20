@@ -130,9 +130,6 @@ struct MenuBarView: View {
                 .toggleStyle(.switch)
                 .disabled(appState.isNewAPIOperationInProgress || appState.isAccountSwitchInProgress)
                 Spacer()
-                Text(appState.newAPIServiceStatus.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {
@@ -168,11 +165,9 @@ struct MenuBarView: View {
         .frame(minHeight: 64)
     }
 
-    /// NewAPI 模式的底部只保留关闭和退出，避免混入账号管理动作。
+    /// NewAPI 模式的底部只保留退出，并与上方管理按钮左侧对齐。
     private var newAPIFooter: some View {
         HStack(spacing: 8) {
-            Spacer()
-
             Button {
                 isShowingQuitConfirmation = true
             } label: {
@@ -181,6 +176,8 @@ struct MenuBarView: View {
             .popover(isPresented: $isShowingQuitConfirmation, arrowEdge: .top) {
                 quitConfirmation
             }
+
+            Spacer()
         }
         .buttonStyle(.plain)
         .frame(minHeight: 32)
