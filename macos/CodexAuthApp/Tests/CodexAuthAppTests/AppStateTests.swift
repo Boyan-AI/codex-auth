@@ -739,6 +739,10 @@ final class StubNewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
     }
 
     func saveAPIKey(_ apiKey: String) throws {}
+
+    func hasSavedAPIKey() -> Bool { true }
+
+    func clearAPIKey() throws {}
 }
 
 /// 记录应用专属 CPA 渠道同步并允许注入失败。

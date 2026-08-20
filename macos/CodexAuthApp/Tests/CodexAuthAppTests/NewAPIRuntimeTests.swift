@@ -362,6 +362,10 @@ private final class StubNewAPIConfigurationStore: NewAPIConfigurationStoring {
             clientConfigurationURL: configuration.clientConfigurationURL
         )
     }
+
+    func clearAPIKey() throws {
+        try saveAPIKey("")
+    }
 }
 
 /// 记录服务启停并提供可配置状态。

@@ -187,6 +187,7 @@ enum NewAPIInstallationPaths {
 protocol NewAPIConfigurationStoring {
     func load() throws -> NewAPIConfiguration
     func saveAPIKey(_ apiKey: String) throws
+    func clearAPIKey() throws
 }
 
 /// 从安装器生成的 `0600` JSON 中读取本机地址和调用 Token。
@@ -236,6 +237,27 @@ struct InstalledNewAPIConfigurationStore: NewAPIConfigurationStoring {
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configurationURL.path)
         } catch let error as NewAPIRuntimeError {
             throw error
+        } catch {
+            throw NewAPIRuntimeError.invalidInstalledConfiguration(error.localizedDescription)
+        }
+    }
+
+    /// 清空调用 Token，但保留 NewAPI 地址和版本配置。
+    func clearAPIKey() throws {
+        var document = try loadDocument()
+        document.apiKey = ""
+        try write(document)
+    }
+
+    /// 原子写回配置并维持仅当前用户可读的权限。
+    private func write(_ document: InstalledNewAPIConfigurationDocument) throws {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            var data = try encoder.encode(document)
+            data.append(0x0A)
+            try data.write(to: configurationURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configurationURL.path)
         } catch {
             throw NewAPIRuntimeError.invalidInstalledConfiguration(error.localizedDescription)
         }
@@ -561,6 +583,8 @@ protocol NewAPIServiceRuntimeProtocol {
     func status() async -> NewAPIServiceStatus
     func openManagementPage() async throws
     func saveAPIKey(_ apiKey: String) throws
+    func hasSavedAPIKey() -> Bool
+    func clearAPIKey() throws
 }
 
 /// 编排 NewAPI LaunchAgent、官方健康端点、Token 和管理网页入口。
@@ -658,6 +682,16 @@ struct NewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
     /// 保存用户从 NewAPI 网页创建的调用 Token。
     func saveAPIKey(_ apiKey: String) throws {
         try configurationStore.saveAPIKey(apiKey)
+    }
+
+    /// 判断本机配置中是否存在调用 Token，不返回真实凭据。
+    func hasSavedAPIKey() -> Bool {
+        (try? configurationStore.load().apiKey.isEmpty == false) ?? false
+    }
+
+    /// 清空本机保存的调用 Token。
+    func clearAPIKey() throws {
+        try configurationStore.clearAPIKey()
     }
 
     /// 检查客户端配置版本和凭据助手是否属于当前固定运行时。

@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     @Published private(set) var deletedAccounts: [DeletedAccountRecord]
     @Published private(set) var cpaServiceStatus: CPAServiceStatus = .unknown
     @Published private(set) var newAPIServiceStatus: NewAPIServiceStatus = .unknown
+    @Published private(set) var hasSavedNewAPIToken = false
     @Published private(set) var isLoading = false
     @Published private(set) var isAccountSwitchInProgress = false
     @Published private(set) var isCPAOperationInProgress = false
@@ -351,6 +352,7 @@ final class AppState: ObservableObject {
         errorMessage = nil
         do {
             try newAPIRuntime.saveAPIKey(apiKey)
+            hasSavedNewAPIToken = true
             await refreshNewAPIServiceStatus()
             notice = "NewAPI Token 已保存。"
         } catch {
@@ -377,6 +379,20 @@ final class AppState: ObservableObject {
     /// 更新 NewAPI 服务状态，不触发启停和全局路由写入。
     func refreshNewAPIServiceStatus() async {
         newAPIServiceStatus = await newAPIRuntime.status()
+        hasSavedNewAPIToken = newAPIRuntime.hasSavedAPIKey()
+    }
+
+    /// 清除本机保存的 NewAPI Token，并刷新服务状态。
+    func clearNewAPIToken() async {
+        errorMessage = nil
+        do {
+            try newAPIRuntime.clearAPIKey()
+            hasSavedNewAPIToken = false
+            await refreshNewAPIServiceStatus()
+            notice = "NewAPI Token 已清除。"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// 退出前按直连路由、NewAPI、CPA 的顺序完成停服，再由 AppDelegate 终止进程。

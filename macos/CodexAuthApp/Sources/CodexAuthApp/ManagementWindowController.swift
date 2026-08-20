@@ -219,13 +219,20 @@ private struct UsageManagementView: View {
 private struct SettingsManagementView: View {
     @EnvironmentObject private var appState: AppState
     @State private var newAPITokenDraft = ""
+    @State private var isEditingNewAPIToken = false
 
     var body: some View {
         Form {
             Section("NewAPI 调用 Token") {
                 VStack(alignment: .leading, spacing: 10) {
-                    SecureField("粘贴 NewAPI Token", text: $newAPITokenDraft)
-                        .textFieldStyle(.roundedBorder)
+                    if appState.hasSavedNewAPIToken && !isEditingNewAPIToken {
+                        Text("••••••••••••")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textFieldStyle(.roundedBorder)
+                    } else {
+                        SecureField("粘贴 NewAPI Token", text: $newAPITokenDraft)
+                            .textFieldStyle(.roundedBorder)
+                    }
 
                     HStack {
                         Text(appState.newAPIServiceStatus.label)
@@ -241,7 +248,16 @@ private struct SettingsManagementView: View {
                             Task { await appState.saveNewAPIToken(token) }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(newAPITokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(
+                            appState.hasSavedNewAPIToken && !isEditingNewAPIToken
+                                || newAPITokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                        Button("清除") {
+                            newAPITokenDraft = ""
+                            isEditingNewAPIToken = false
+                            Task { await appState.clearNewAPIToken() }
+                        }
+                        .disabled(!appState.hasSavedNewAPIToken)
                     }
                 }
             }
