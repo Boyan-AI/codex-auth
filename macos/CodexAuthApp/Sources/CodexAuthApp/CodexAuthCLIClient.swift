@@ -20,7 +20,7 @@ extension CommandRunning {
 protocol CodexAuthClientProtocol {
     func loadState(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState
     func loadTokenUsage(mode: TokenUsageScanMode) async throws -> TokenUsageInfo
-    func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState
+    func refresh(apiMode: CodexAuthAPIMode, includeResetCredits: Bool) async throws -> CodexAuthState
     func switchAccount(accountKey: String) async throws -> CodexAuthState
     func removeAccount(accountKey: String) async throws -> CodexAuthState
     func setAlias(accountKey: String, alias: String) async throws -> CodexAuthState
@@ -147,9 +147,12 @@ struct CodexAuthCLIClient: CodexAuthClientProtocol {
     }
 
     /// 刷新账号额度，并只对该请求注入用户配置的网络代理。
-    func refresh(apiMode: CodexAuthAPIMode = .automatic) async throws -> CodexAuthState {
+    func refresh(
+        apiMode: CodexAuthAPIMode = .automatic,
+        includeResetCredits: Bool = true
+    ) async throws -> CodexAuthState {
         try await runStateCommand(
-            ["gui", "refresh"] + apiMode.arguments,
+            ["gui", "refresh"] + apiMode.arguments + (includeResetCredits ? [] : ["--skip-reset-credits"]),
             environment: QuotaProxyConfiguration.environment(proxyURL: quotaProxyURLProvider())
         )
     }

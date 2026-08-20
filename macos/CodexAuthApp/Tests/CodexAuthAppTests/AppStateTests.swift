@@ -200,6 +200,8 @@ final class AppStateTests: XCTestCase {
         client.recordsLoadStateOperation = true
         let runtime = StubCPAServiceRuntime(operations: operations, status: .running)
         let appState = AppState(client: client, cpaRuntime: runtime)
+        await appState.refreshOnMenuOpen()
+        operations.values.removeAll()
         let stateLoadGate = AsyncOperationGate()
         client.loadStateGate = stateLoadGate
 
@@ -219,16 +221,24 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.cpaServiceStatus, .stopped)
     }
 
-    /// 验证打开菜单只读取本地状态，不触发账号联网刷新。
-    func testMenuOpenLoadsLocalStateWithoutNetworkRefresh() async {
+    /// 验证菜单打开十二小时内只查询一次重置次数，其余打开只读本地状态。
+    func testMenuOpenRefreshesResetCreditsAtMostOncePerTwelveHours() async {
         let client = StubCodexAuthClient(state: makeState(route: .direct))
-        let appState = AppState(client: client, cpaRuntime: StubCPAServiceRuntime())
+        var currentDate = Date(timeIntervalSince1970: 1_000)
+        let appState = AppState(
+            client: client,
+            cpaRuntime: StubCPAServiceRuntime(),
+            now: { currentDate }
+        )
 
+        await appState.refreshOnMenuOpen()
+        await appState.refreshOnMenuOpen()
+        currentDate.addTimeInterval(AppState.resetCreditsRefreshInterval)
         await appState.refreshOnMenuOpen()
 
         XCTAssertEqual(client.loadStateCallCount, 1)
-        XCTAssertEqual(client.refreshCallCount, 0)
-        XCTAssertTrue(client.tokenUsageModes.isEmpty)
+        XCTAssertEqual(client.refreshCallCount, 2)
+        XCTAssertEqual(client.resetCreditsRequests, [true, true])
     }
 
     /// 验证 60 秒周期刷新在更新账号额度后执行增量 Token 扫描。
@@ -239,6 +249,7 @@ final class AppStateTests: XCTestCase {
         await appState.refreshOnPeriodicTimer()
 
         XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.resetCreditsRequests, [false])
         XCTAssertEqual(client.tokenUsageModes, [.incremental])
     }
 
@@ -250,6 +261,7 @@ final class AppStateTests: XCTestCase {
         await appState.refreshUsage()
 
         XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.resetCreditsRequests, [true])
         XCTAssertEqual(client.tokenUsageModes, [.incremental])
     }
 
@@ -544,7 +556,8 @@ final class AppStateTests: XCTestCase {
         await tokenUsageGate.waitUntilSuspended()
 
         XCTAssertEqual(client.loadStateCallCount, 1)
-        XCTAssertEqual(client.refreshCallCount, 0)
+        XCTAssertEqual(client.refreshCallCount, 1)
+        XCTAssertEqual(client.resetCreditsRequests, [true])
         XCTAssertEqual(client.tokenUsageCallCount, 1)
         await tokenUsageGate.resume()
     }
@@ -569,6 +582,7 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     var recordsTokenUsageOperation = false
     var loadStateCallCount = 0
     var refreshCallCount = 0
+    var resetCreditsRequests: [Bool] = []
     var tokenUsageCallCount = 0
     var tokenUsageModes: [TokenUsageScanMode] = []
 
@@ -587,9 +601,9 @@ final class StubCodexAuthClient: CodexAuthClientProtocol {
     }
 
     /// 返回刷新开始时捕获的快照，并允许测试暂停结果以复现旧请求晚到。
-    func refresh(apiMode: CodexAuthAPIMode) async throws -> CodexAuthState {
+    func refresh(apiMode: CodexAuthAPIMode, includeResetCredits: Bool) async throws -> CodexAuthState {
         refreshCallCount += 1
-        operations?.values.append("refresh")
+        resetCreditsRequests.append(includeResetCredits)
         let snapshot = state
         if let refreshGate { await refreshGate.suspend() }
         return snapshot

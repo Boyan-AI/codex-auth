@@ -72,6 +72,7 @@ pub const AppOptions = struct {
 pub const GuiStateOptions = struct {
     api_mode: ApiMode = .default,
     active_only: bool = false,
+    skip_reset_credits: bool = false,
 };
 pub const GuiStatsOptions = struct {
     full: bool = false,

@@ -150,6 +150,24 @@ test "Scenario: Given gui refresh api flag when parsing then gui refresh options
     }
 }
 
+test "Scenario: Given gui refresh skips reset credits when parsing then option is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "gui", "refresh", "--skip-reset-credits" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .gui => |opts| switch (opts) {
+                .refresh => |refresh_opts| try std.testing.expect(refresh_opts.skip_reset_credits),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given gui stats full flag when parsing then full scan is requested" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "gui", "stats", "--full" };

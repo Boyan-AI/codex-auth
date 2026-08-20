@@ -97,6 +97,16 @@ final class CLIClientTests: XCTestCase {
         XCTAssertNil(runner.calls[0].environment)
     }
 
+    /// 验证普通额度刷新显式跳过慢速重置次数查询。
+    func testClientCanSkipResetCreditsRefresh() async throws {
+        let runner = RecordingCommandRunner(output: emptyStateJSON())
+        let client = makeClient(runner: runner)
+
+        _ = try await client.refresh(apiMode: .automatic, includeResetCredits: false)
+
+        XCTAssertEqual(runner.calls.map(\.arguments), [["gui", "refresh", "--skip-reset-credits"]])
+    }
+
     /// 验证全量 Token 扫描传递稳定参数。
     func testClientBuildsFullTokenUsageCommand() async throws {
         let output = #"{"timezone":"UTC","summary":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0},"today":null,"latest_day":null,"days":[],"quality":{"files_scanned":0,"files_with_usage":0,"repeated_snapshots":0,"segmented_sessions":0,"parse_errors":0}}"#

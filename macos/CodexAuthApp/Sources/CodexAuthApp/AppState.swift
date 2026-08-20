@@ -11,6 +11,7 @@ private enum AppRefreshWork {
 @MainActor
 final class AppState: ObservableObject {
     nonisolated static let defaultPeriodicRefreshIntervalNanoseconds: UInt64 = 60_000_000_000
+    nonisolated static let resetCreditsRefreshInterval: TimeInterval = 12 * 60 * 60
 
     @Published private(set) var state: CodexAuthState?
     @Published private(set) var tokenUsage: TokenUsageInfo?
@@ -39,10 +40,14 @@ final class AppState: ObservableObject {
     private var activeRefreshWork: AppRefreshWork?
     private var pendingFullRefresh = false
     private var pendingQuotaRefresh = false
+    private var pendingResetCreditsRefresh = false
+    private var pendingTokenRefresh = false
     private var pendingStateLoad = false
     private var tokenUsageGeneration = 0
     private var loadSequence = 0
     private var isShuttingDown = false
+    private var lastResetCreditsRefreshAt: Date?
+    private let now: () -> Date
 
     /// 注入状态客户端和低额度展示器，便于隔离系统通知并测试阈值行为。
     init(
@@ -50,13 +55,15 @@ final class AppState: ObservableObject {
         cpaRuntime: CPAServiceRuntimeProtocol = CPAServiceRuntime(),
         newAPIRuntime: NewAPIServiceRuntimeProtocol = NewAPIServiceRuntime(),
         newAPIChannelProvisioner: NewAPICPAChannelProvisioning = BundledNewAPICPAChannelProvisioner(),
-        usageAlertPresenter: UsageAlertPresenting? = nil
+        usageAlertPresenter: UsageAlertPresenting? = nil,
+        now: @escaping () -> Date = Date.init
     ) {
         self.client = client
         self.cpaRuntime = cpaRuntime
         self.newAPIRuntime = newAPIRuntime
         self.newAPIChannelProvisioner = newAPIChannelProvisioner
         self.usageAlertPresenter = usageAlertPresenter ?? DisabledUsageAlertPresenter()
+        self.now = now
         self.deletedAccounts = DeletedAccountStore.load()
     }
 
@@ -117,6 +124,14 @@ final class AppState: ObservableObject {
             await stopNewAPIIfNeeded()
         }
         isCPAOperationInProgress = false
+        if errorMessage == nil {
+            await requestRefresh(
+                .quota,
+                apiMode: apiMode,
+                includeResetCredits: true,
+                includeTokenRefresh: false
+            )
+        }
         startInitialTokenRefresh()
     }
 
@@ -130,7 +145,16 @@ final class AppState: ObservableObject {
     /// 菜单打开时只读取本地权威状态；CPA 路由写入期间跳过，避免并发 CLI 覆盖注册表。
     func refreshOnMenuOpen(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
-        await requestRefresh(.state, apiMode: apiMode)
+        if shouldRefreshResetCredits {
+            await requestRefresh(
+                .quota,
+                apiMode: apiMode,
+                includeResetCredits: true,
+                includeTokenRefresh: false
+            )
+        } else {
+            await requestRefresh(.state, apiMode: apiMode)
+        }
         if isNewAPIEnabled {
             await refreshNewAPIServiceStatus()
             await refreshCPAServiceStatus()
@@ -158,13 +182,13 @@ final class AppState: ObservableObject {
 
     func refreshOnPeriodicTimer(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
-        await requestRefresh(.quota, apiMode: apiMode)
+        await requestRefresh(.quota, apiMode: apiMode, includeResetCredits: false)
     }
 
     /// 手动刷新额度与 Token；CPA 路由写入期间留待下次刷新。
     func refreshUsage(apiMode: CodexAuthAPIMode = .automatic) async {
         guard !isCPAOperationInProgress, !isNewAPIOperationInProgress else { return }
-        await requestRefresh(.quota, apiMode: apiMode)
+        await requestRefresh(.quota, apiMode: apiMode, includeResetCredits: true)
     }
 
     func switchAccount(accountKey: String) async {
@@ -617,8 +641,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 判断菜单打开时是否已经超过重置次数的十二小时缓存窗口。
+    private var shouldRefreshResetCredits: Bool {
+        guard let lastResetCreditsRefreshAt else { return true }
+        return now().timeIntervalSince(lastResetCreditsRefreshAt) >= Self.resetCreditsRefreshInterval
+    }
+
     /// 合并刷新请求并等待当前刷新循环处理完所有必要的后续工作。
-    private func requestRefresh(_ work: AppRefreshWork, apiMode: CodexAuthAPIMode) async {
+    private func requestRefresh(
+        _ work: AppRefreshWork,
+        apiMode: CodexAuthAPIMode,
+        includeResetCredits: Bool = false,
+        includeTokenRefresh: Bool = true
+    ) async {
         switch work {
         case .full:
             if activeRefreshWork != .full {
@@ -627,6 +662,8 @@ final class AppState: ObservableObject {
         case .quota:
             if activeRefreshWork != .full && activeRefreshWork != .quota && !pendingFullRefresh {
                 pendingQuotaRefresh = true
+                pendingResetCreditsRefresh = pendingResetCreditsRefresh || includeResetCredits
+                pendingTokenRefresh = pendingTokenRefresh || includeTokenRefresh
             }
         case .state:
             if activeRefreshWork == nil && !pendingFullRefresh && !pendingQuotaRefresh {
@@ -655,6 +692,8 @@ final class AppState: ObservableObject {
             if pendingFullRefresh {
                 pendingFullRefresh = false
                 pendingQuotaRefresh = false
+                pendingResetCreditsRefresh = false
+                pendingTokenRefresh = false
                 pendingStateLoad = false
                 activeRefreshWork = .full
                 await performFullRefresh(apiMode: apiMode)
@@ -663,9 +702,17 @@ final class AppState: ObservableObject {
             }
             if pendingQuotaRefresh {
                 pendingQuotaRefresh = false
+                let includeResetCredits = pendingResetCreditsRefresh
+                pendingResetCreditsRefresh = false
+                let includeTokenRefresh = pendingTokenRefresh
+                pendingTokenRefresh = false
                 pendingStateLoad = false
                 activeRefreshWork = .quota
-                await performQuotaRefresh(apiMode: apiMode)
+                await performQuotaRefresh(
+                    apiMode: apiMode,
+                    includeResetCredits: includeResetCredits,
+                    includeTokenRefresh: includeTokenRefresh
+                )
                 activeRefreshWork = nil
                 continue
             }
@@ -688,7 +735,7 @@ final class AppState: ObservableObject {
         do {
             let loadedState = try await client.loadState(apiMode: apiMode)
             if sequence == loadSequence {
-                await acceptState(loadedState)
+                await acceptState(loadedState.preservingResetCredits(from: state))
             }
         } catch {
             if sequence == loadSequence {
@@ -703,9 +750,10 @@ final class AppState: ObservableObject {
         let sequence = loadSequence
         errorMessage = nil
         do {
-            let loadedState = try await client.refresh(apiMode: apiMode)
+            let loadedState = try await client.refresh(apiMode: apiMode, includeResetCredits: true)
             if sequence == loadSequence {
                 await acceptState(loadedState)
+                lastResetCreditsRefreshAt = now()
             }
         } catch {
             if sequence == loadSequence {
@@ -716,21 +764,36 @@ final class AppState: ObservableObject {
     }
 
     /// 刷新权威额度后执行增量 Token 扫描，并沿用序列号保护账号切换结果。
-    private func performQuotaRefresh(apiMode: CodexAuthAPIMode) async {
+    private func performQuotaRefresh(
+        apiMode: CodexAuthAPIMode,
+        includeResetCredits: Bool,
+        includeTokenRefresh: Bool
+    ) async {
         loadSequence += 1
         let sequence = loadSequence
         errorMessage = nil
         do {
-            let loadedState = try await client.refresh(apiMode: apiMode)
+            let loadedState = try await client.refresh(
+                apiMode: apiMode,
+                includeResetCredits: includeResetCredits
+            )
             if sequence == loadSequence {
-                await acceptState(loadedState)
+                let acceptedState = includeResetCredits
+                    ? loadedState
+                    : loadedState.preservingResetCredits(from: state)
+                await acceptState(acceptedState)
+                if includeResetCredits {
+                    lastResetCreditsRefreshAt = now()
+                }
             }
         } catch {
             if sequence == loadSequence {
                 errorMessage = error.localizedDescription
             }
         }
-        await performIncrementalTokenRefresh()
+        if includeTokenRefresh {
+            await performIncrementalTokenRefresh()
+        }
     }
 
     /// 等待启动全量扫描结束后再增量扫描，避免两个 CLI 进程并发改写 Token 缓存。

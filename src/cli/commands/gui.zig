@@ -129,6 +129,8 @@ fn parseStateLike(
             opts.api_mode = .skip_api;
         } else if (std.mem.eql(u8, arg, "--active")) {
             opts.active_only = true;
+        } else if (std.mem.eql(u8, arg, "--skip-reset-credits")) {
+            opts.skip_reset_credits = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             return common.usageErrorResult(allocator, .gui, "unknown flag `{s}` for `gui {s}`.", .{ arg, @tagName(kind) });
         } else {

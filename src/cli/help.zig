@@ -236,7 +236,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .gui => {
             try out.writeAll("  codex-auth gui state [--active] [--api|--skip-api]\n");
-            try out.writeAll("  codex-auth gui refresh [--active] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth gui refresh [--active] [--api|--skip-api] [--skip-reset-credits]\n");
             try out.writeAll("  codex-auth gui stats [--full]\n");
             try out.writeAll("  codex-auth gui switch <account-key>\n");
             try out.writeAll("  codex-auth gui remove <account-key>\n");

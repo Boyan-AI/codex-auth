@@ -153,6 +153,33 @@ struct CodexAuthState: Decodable, Equatable {
         )
     }
 
+    /// 在跳过慢速重置次数查询时保留当前已展示结果，其余额度采用最新状态。
+    func preservingResetCredits(from currentState: CodexAuthState?) -> CodexAuthState {
+        guard let currentState, currentState.codexHome == codexHome else { return self }
+        var mergedAccounts = accounts
+        for index in mergedAccounts.indices {
+            guard let currentAccount = currentState.accounts.first(where: {
+                $0.accountKey == mergedAccounts[index].accountKey
+            }) else { continue }
+            mergedAccounts[index].resetCredits = currentAccount.resetCredits
+        }
+        let activeResetCredits = mergedAccounts.first(where: {
+            $0.accountKey == activeAccountKey || $0.isActive
+        })?.resetCredits
+        return CodexAuthState(
+            schemaVersion: schemaVersion,
+            codexHome: codexHome,
+            globalRoute: globalRoute,
+            activeAccountKey: activeAccountKey,
+            generatedAt: generatedAt,
+            refresh: refresh,
+            resetCredits: activeResetCredits ?? currentState.resetCredits,
+            warnings: warnings,
+            tokenUsage: tokenUsage,
+            accounts: mergedAccounts
+        )
+    }
+
     static func empty(codexHome: String) -> CodexAuthState {
         CodexAuthState(
             schemaVersion: 1,

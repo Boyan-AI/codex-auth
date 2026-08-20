@@ -196,7 +196,7 @@ fn handleState(
             usage_api_enabled,
             opts.active_only,
         );
-        if (usage_api_enabled) {
+        if (usage_api_enabled and !opts.skip_reset_credits) {
             const auth_paths = try allocator.alloc([]u8, reg.accounts.items.len);
             var initialized_paths: usize = 0;
             defer {
@@ -207,7 +207,7 @@ fn handleState(
                 auth_paths[idx] = try registry.accountAuthPath(allocator, codex_home, account.account_key);
                 initialized_paths += 1;
             }
-            // 打开菜单时以有界并发查询全部账号，完成后仍由 GUI 一次性合并详情。
+            // 仅在桌面端明确要求时并发查询全部账号，普通额度刷新复用已有重置次数。
             reset_credits_by_account = try fetchResetCreditsConcurrently(
                 allocator,
                 auth_paths,
