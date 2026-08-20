@@ -6,7 +6,7 @@ This document defines the local macOS workbench that combines Codex Auth, NewAPI
 
 - Codex Auth is the menu bar controller and keeps one fallback direct ChatGPT account or API Key selected.
 - NewAPI is the unified API exit. It owns channels, users, distributed Tokens, quotas, and routing policy through its native web UI.
-- CPA is one optional NewAPI upstream. It converts subscription accounts and OAuth sessions into an OpenAI-compatible local API.
+- CPA is the required managed upstream when Codex Auth enables NewAPI automatically. It converts subscription accounts and OAuth sessions into an OpenAI-compatible local API.
 - CPA Manager Plus (CPAMP) is the local CPA management page service. Codex Auth starts it only when the CPA management page is opened and stops it with the other managed services.
 - Codex Auth does not copy or reconcile NewAPI users or CPA accounts. It owns exactly one explicitly marked NewAPI channel named `Codex Auth CPA`, which connects the managed local CPA as the default upstream. Other NewAPI channels remain user-owned.
 
@@ -44,7 +44,7 @@ The SQLite database belongs to NewAPI and closes with the NewAPI process. There 
 5. Paste that Token once into Codex Auth settings and save it.
 6. Enable NewAPI from the menu bar.
 
-When NewAPI is enabled, Codex Auth stops NewAPI before touching its SQLite database, verifies the pinned runtime schema, and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and exposes the managed Codex model. A user-created channel is never adopted by matching its URL or Key. Schema drift or ambiguous application-owned rows fail closed before the Codex route changes.
+When NewAPI is enabled, Codex Auth first requires CPA to be healthy, then stops NewAPI before touching its SQLite database. The channel configurator verifies the pinned runtime schema and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and synchronizes every non-empty model returned by the local CPA `/v1/models` endpoint into both `channels.models` and `abilities`. Model identifiers are de-duplicated and ordered deterministically, while `gpt-5.6-sol` remains the minimum model required by the managed health contract. A user-created channel is never adopted by matching its URL or Key. An unavailable or malformed CPA catalog, an unsafe identifier that NewAPI cannot represent, a missing required model, schema drift, or ambiguous application-owned rows fails closed before the Codex route changes.
 
 The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather than a plain SQLite text value. The managed-channel configurator therefore stores its empty channel metadata as a valid JSON BLOB; this keeps both the native channel page and the distributor's channel lookup compatible with the release schema.
 
@@ -54,9 +54,10 @@ Codex Auth never stores the NewAPI administrator password. The calling Token is 
 
 Enable order:
 
-1. Attempt to start and validate CPA. Failure is recorded as a degraded optional upstream and does not block NewAPI.
-2. Start NewAPI and validate its status endpoint, administrator setup, credential helper, and calling Token.
-3. Patch Codex configuration to use `codex_auth_newapi` and persist `global_route = "newapi"`.
+1. Start and validate CPA as the required managed upstream.
+2. Stop NewAPI, synchronize the complete CPA model catalog into the application-owned channel, and restart NewAPI.
+3. Validate NewAPI's status endpoint, administrator setup, credential helper, calling Token, and minimum managed model.
+4. Patch Codex configuration to use `codex_auth_newapi` and persist `global_route = "newapi"`.
 
 Disable and quit order:
 

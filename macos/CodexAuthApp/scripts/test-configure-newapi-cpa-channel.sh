@@ -6,7 +6,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONFIGURATOR="${SCRIPT_DIR}/configure-newapi-cpa-channel.sh"
 readonly MANAGED_NAME="Codex Auth CPA"
 readonly MANAGED_REMARK="Managed by Codex Auth. Uses the local CPA default API key."
-readonly EXPECTED_MODEL="gpt-5.6-sol"
+readonly EXPECTED_MODELS="gpt-5.5,gpt-5.6-sol,gpt-5.6-terra"
 readonly TEST_ROOT="$(mktemp -d /tmp/codex-auth-newapi-cpa-channel-test.XXXXXX)"
 
 # 仅清理本测试创建的临时目录。
@@ -46,7 +46,8 @@ create_fixture() {
     install -d -m 700 "${runtime_dir}/data" "${runtime_dir}/backups" "${cpa_dir}"
     printf '%s\n' 'v1.0.0-rc.25' > "${runtime_dir}/VERSION"
     printf '{"base_url":"http://127.0.0.1:8317/v1","api_key":"%s"}\n' "${cpa_key}" > "${cpa_dir}/client.json"
-    chmod 600 "${runtime_dir}/VERSION" "${cpa_dir}/client.json"
+    printf '%s\n' '{"data":[{"id":"gpt-5.6-terra"},{"id":"gpt-5.6-sol"},{"id":"gpt-5.5"},{"id":"gpt-5.6-terra"},{"id":"  "}]}' > "${cpa_dir}/models.json"
+    chmod 600 "${runtime_dir}/VERSION" "${cpa_dir}/client.json" "${cpa_dir}/models.json"
     /usr/bin/sqlite3 "${runtime_dir}/data/new-api.db" <<'SQL'
 CREATE TABLE channels (
     id INTEGER PRIMARY KEY,
@@ -88,6 +89,7 @@ run_configurator() {
     CODEX_AUTH_TESTING=1 \
     CODEX_AUTH_NEWAPI_RUNTIME_DIR="${fixture_root}/NewAPI" \
     CODEX_AUTH_CPA_CLIENT_PATH="${fixture_root}/CPA/client.json" \
+    CODEX_AUTH_CPA_MODELS_PATH="${fixture_root}/CPA/models.json" \
     "${CONFIGURATOR}" 2>&1
 }
 
@@ -103,21 +105,60 @@ create_fixture "${fixture}" "first-secret"
 output="$(run_configurator "${fixture}")"
 db="$(database_path "${fixture}")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1" "Managed channel count"
-assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT type || '|' || key || '|' || status || '|' || base_url || '|' || models || '|' || \"group\" FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1|first-secret|1|http://127.0.0.1:8317|${EXPECTED_MODEL}|default" "Managed channel fields"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT type || '|' || key || '|' || status || '|' || base_url || '|' || models || '|' || \"group\" FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1|first-secret|1|http://127.0.0.1:8317|${EXPECTED_MODELS}|default" "Managed channel fields"
 managed_id="$(/usr/bin/sqlite3 "${db}" "SELECT id FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")"
-assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT \"group\" || '|' || model || '|' || channel_id || '|' || enabled FROM abilities WHERE channel_id=${managed_id};")" "default|${EXPECTED_MODEL}|${managed_id}|1" "Managed ability fields"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT group_concat(model, ',') FROM (SELECT model FROM abilities WHERE channel_id=${managed_id} AND \"group\"='default' AND enabled=1 ORDER BY model);")" "${EXPECTED_MODELS}" "Managed ability models"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Managed channel JSON storage"
 assert_not_contains "${output}" "first-secret" "Create output"
+
+# 模型和 Key 均未变化时必须幂等返回，不产生额外数据库备份。
+backup_count="$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')"
+output="$(run_configurator "${fixture}")"
+assert_equal "$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')" "${backup_count}" "Idempotent backup count"
+assert_not_contains "${output}" "first-secret" "Idempotent output"
 
 # 用户自建的同地址渠道不能被自动渠道认领或覆盖。
 /usr/bin/sqlite3 "${db}" "INSERT INTO channels(type,key,status,name,base_url,models,\"group\",remark) VALUES(1,'user-secret',1,'User CPA','http://127.0.0.1:8317','user-model','default','User managed');"
 printf '%s\n' '{"base_url":"http://127.0.0.1:8317/v1","api_key":"second-secret"}' > "${fixture}/CPA/client.json"
+printf '%s\n' '{"data":[{"id":"o3"},{"id":"gpt-5.6-sol"},{"id":"o3"}]}' > "${fixture}/CPA/models.json"
 output="$(run_configurator "${fixture}")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT key || '|' || models || '|' || remark FROM channels WHERE name='User CPA';")" "user-secret|user-model|User managed" "User channel preservation"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT key FROM channels WHERE id=${managed_id};")" "second-secret" "Managed key refresh"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT models FROM channels WHERE id=${managed_id};")" "gpt-5.6-sol,o3" "Managed model refresh"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT group_concat(model, ',') FROM (SELECT model FROM abilities WHERE channel_id=${managed_id} ORDER BY model);")" "gpt-5.6-sol,o3" "Managed ability refresh"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Updated channel JSON storage"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1" "Idempotent managed channel count"
 assert_not_contains "${output}" "second-secret" "Update output"
+
+# 缺少最低健康模型时必须在数据库写入前失败。
+fixture="${TEST_ROOT}/missing-managed-model"
+create_fixture "${fixture}" "minimum-model-secret"
+printf '%s\n' '{"data":[{"id":"gpt-5.6-terra"}]}' > "${fixture}/CPA/models.json"
+if output="$(run_configurator "${fixture}" 2>&1)"; then
+    fail "A CPA catalog without the managed model was accepted."
+fi
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM channels;")" "0" "Missing managed model write count"
+assert_not_contains "${output}" "minimum-model-secret" "Missing managed model output"
+
+# 含逗号的模型无法安全写入 NewAPI 逗号分隔字段，必须关闭失败。
+fixture="${TEST_ROOT}/unsafe-model"
+create_fixture "${fixture}" "unsafe-model-secret"
+printf '%s\n' '{"data":[{"id":"gpt-5.6-sol"},{"id":"unsafe,model"}]}' > "${fixture}/CPA/models.json"
+if output="$(run_configurator "${fixture}" 2>&1)"; then
+    fail "A model identifier containing a comma was accepted."
+fi
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM channels;")" "0" "Unsafe model write count"
+assert_not_contains "${output}" "unsafe-model-secret" "Unsafe model output"
+
+# 非法 JSON 和缺失 id 的目录项必须在数据库写入前失败。
+fixture="${TEST_ROOT}/malformed-catalog"
+create_fixture "${fixture}" "malformed-catalog-secret"
+printf '%s\n' '{"data":[{"id":"gpt-5.6-sol"},{}]}' > "${fixture}/CPA/models.json"
+if output="$(run_configurator "${fixture}" 2>&1)"; then
+    fail "A malformed CPA model catalog was accepted."
+fi
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM channels;")" "0" "Malformed catalog write count"
+assert_not_contains "${output}" "malformed-catalog-secret" "Malformed catalog output"
 
 # 缺失必要 schema 时必须在写入前失败。
 fixture="${TEST_ROOT}/schema"
