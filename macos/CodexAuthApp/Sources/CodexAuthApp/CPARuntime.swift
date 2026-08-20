@@ -816,7 +816,7 @@ protocol CPAServiceRuntimeProtocol {
 
 /// 编排服务生命周期、健康检查、配置契约和系统浏览器入口。
 struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
-    /// launchd 完成拉起后，CPA 端口可能仍在初始化；这些退避间隔覆盖该就绪窗口。
+    /// launchd 完成拉起后，CPA 与 CPAMP 端口可能仍在初始化；这些退避间隔覆盖该就绪窗口。
     static let defaultStartupRetryDelaysNanoseconds: [UInt64] = [
         100_000_000,
         250_000_000,
@@ -893,6 +893,20 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     }
 
+    /// 在 CPAMP 管理端口尚未就绪时短暂重试，保证首次点击管理入口也能等待服务启动完成。
+    private func validateManagerStartupReadiness(_ configuration: CPAManagerConfiguration) async throws {
+        var remainingDelays = startupRetryDelaysNanoseconds
+        while true {
+            do {
+                try await managerHealthChecker.validate(configuration)
+                return
+            } catch let error as CPARuntimeError {
+                guard case .unavailable = error, !remainingDelays.isEmpty else { throw error }
+                await sleep(remainingDelays.removeFirst())
+            }
+        }
+    }
+
     /// 幂等关闭 CPA 网关和按需启动的 CPAMP 管理服务，并确保两者都会被尝试停止。
     func stop() async throws {
         var firstError: Error?
@@ -933,7 +947,7 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
     func openManagementPage() async throws {
         try await managerServiceController.start()
         let managerConfiguration = try managerConfigurationProvider.load()
-        try await managerHealthChecker.validate(managerConfiguration)
+        try await validateManagerStartupReadiness(managerConfiguration)
         guard browser.open(managerConfiguration.managementPageURL) else {
             throw CPARuntimeError.browserOpenFailed
         }

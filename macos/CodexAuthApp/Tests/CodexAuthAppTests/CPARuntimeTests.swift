@@ -401,7 +401,9 @@ final class CPARuntimeTests: XCTestCase {
             contractChecker: AcceptingCPAContractChecker(),
             managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
             managerHealthChecker: FailingCPAManagerHealthChecker(),
-            browser: browser
+            browser: browser,
+            startupRetryDelaysNanoseconds: [],
+            sleep: { _ in }
         )
 
         do {
@@ -411,6 +413,33 @@ final class CPARuntimeTests: XCTestCase {
             XCTAssertEqual(managerService.calls, ["start"])
             XCTAssertTrue(browser.openedURLs.isEmpty)
         }
+    }
+
+    /// 验证 CPAMP 冷启动首次未就绪时会自动等待，并在同一次点击中打开管理页。
+    func testRuntimeRetriesUnavailableCPAManagerUntilReady() async throws {
+        let browser = RecordingCPABrowser()
+        let managerService = StubCPAServiceController()
+        let managerHealthChecker = EventuallySuccessfulCPAManagerHealthChecker(failuresBeforeSuccess: 2)
+        var delays: [UInt64] = []
+        let runtime = CPAServiceRuntime(
+            serviceController: StubCPAServiceController(),
+            managerServiceController: managerService,
+            configurationProvider: FixedCPAConfigurationProvider(configuration: try makeConfiguration()),
+            healthChecker: SuccessfulCPAHealthChecker(),
+            contractChecker: AcceptingCPAContractChecker(),
+            managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
+            managerHealthChecker: managerHealthChecker,
+            browser: browser,
+            startupRetryDelaysNanoseconds: [0, 0],
+            sleep: { delays.append($0) }
+        )
+
+        try await runtime.openManagementPage()
+
+        XCTAssertEqual(managerService.calls, ["start"])
+        XCTAssertEqual(managerHealthChecker.attempts, 3)
+        XCTAssertEqual(delays, [0, 0])
+        XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:18317/management.html")!])
     }
 
     /// 验证管理页只在健康检查通过后打开，且 URL 不携带任何密钥。
@@ -636,6 +665,23 @@ private struct SuccessfulCPAManagerHealthChecker: CPAManagerHealthChecking {
 private struct FailingCPAManagerHealthChecker: CPAManagerHealthChecking {
     func validate(_ configuration: CPAManagerConfiguration) async throws {
         throw CPARuntimeError.unavailable("CPAMP test")
+    }
+}
+
+/// 前几次模拟 CPAMP 端口拒绝连接，随后返回健康，用于覆盖管理页冷启动竞态。
+private final class EventuallySuccessfulCPAManagerHealthChecker: CPAManagerHealthChecking {
+    private let failuresBeforeSuccess: Int
+    private(set) var attempts = 0
+
+    init(failuresBeforeSuccess: Int) {
+        self.failuresBeforeSuccess = failuresBeforeSuccess
+    }
+
+    func validate(_ configuration: CPAManagerConfiguration) async throws {
+        attempts += 1
+        if attempts <= failuresBeforeSuccess {
+            throw CPARuntimeError.unavailable("CPAMP not ready")
+        }
     }
 }
 
