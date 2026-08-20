@@ -50,7 +50,13 @@ struct MenuBarView: View {
             titleVisibility: .visible
         ) {
             Button("退出并停止服务", role: .destructive) {
-                NSApplication.shared.terminate(nil)
+                // 菜单栏弹窗中的 terminate 可能被 AppKit 延迟；由确认动作直接清理并在超时后结束进程。
+                Task { @MainActor in
+                    let cleanup = Task { @MainActor in await appState.shutdown() }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    cleanup.cancel()
+                    Darwin.exit(0)
+                }
             }
             Button("取消", role: .cancel) {}
         } message: {
