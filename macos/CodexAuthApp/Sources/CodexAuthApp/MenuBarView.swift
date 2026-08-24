@@ -43,6 +43,15 @@ struct MenuBarView: View {
         } message: {
             Text("将先恢复直连，再停止 NewAPI 和 CPA。")
         }
+        .alert("发现运行时更新", isPresented: Binding(
+            get: { appState.runtimeUpdateManifest != nil && !appState.isRuntimeUpgradeInProgress },
+            set: { if !$0 { appState.runtimeUpdateManifest = nil } }
+        )) {
+            Button("一键升级") { Task { await appState.upgradeRuntime() } }
+            Button("稍后提醒", role: .cancel) { appState.runtimeUpdateManifest = nil }
+        } message: {
+            Text("NewAPI、CPA 和 CPAMP 将一起升级，期间服务会短暂停止；失败时自动恢复旧版本。")
+        }
     }
 
     /// 在菜单栏弹窗内部展示退出确认，避免系统 confirmationDialog 阻塞无窗口 App。

@@ -33,10 +33,12 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$SWIFT_BUILD_DIR/release/CodexAuthApp" "$APP_BUNDLE/Contents/MacOS/CodexAuthApp"
 cp "$ZIG_INSTALL_DIR/bin/codex-auth" "$APP_BUNDLE/Contents/Resources/codex-auth"
 cp "$SCRIPT_DIR/configure-newapi-cpa-channel.sh" "$APP_BUNDLE/Contents/Resources/configure-newapi-cpa-channel.sh"
+cp "$SCRIPT_DIR/runtime-update.sh" "$APP_BUNDLE/Contents/Resources/runtime-update.sh"
 chmod +x \
   "$APP_BUNDLE/Contents/MacOS/CodexAuthApp" \
   "$APP_BUNDLE/Contents/Resources/codex-auth" \
-  "$APP_BUNDLE/Contents/Resources/configure-newapi-cpa-channel.sh"
+  "$APP_BUNDLE/Contents/Resources/configure-newapi-cpa-channel.sh" \
+  "$APP_BUNDLE/Contents/Resources/runtime-update.sh"
 
 echo "Generating app icon..."
 swift "$SCRIPT_DIR/generate-icon.swift" "$ICON_SOURCE" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"

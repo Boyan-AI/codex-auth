@@ -46,6 +46,7 @@ struct CodexAuthMenuApp: App {
             appState.prepareUsageAlerts()
             appState.startPeriodicRefresh()
             await appState.refreshOnAppLaunch()
+            await appState.checkForRuntimeUpdates()
         }
     }
 

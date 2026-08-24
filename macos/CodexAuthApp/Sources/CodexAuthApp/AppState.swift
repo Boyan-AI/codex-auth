@@ -23,6 +23,9 @@ final class AppState: ObservableObject {
     @Published private(set) var isAccountSwitchInProgress = false
     @Published private(set) var isCPAOperationInProgress = false
     @Published private(set) var isNewAPIOperationInProgress = false
+    @Published var runtimeUpdateManifest: RuntimeUpdateManifest?
+    @Published private(set) var isRuntimeUpdateChecking = false
+    @Published private(set) var isRuntimeUpgradeInProgress = false
     @Published var errorMessage: String?
     @Published var notice: String?
     @Published var pendingDeleteAccount: CodexAccount?
@@ -48,6 +51,9 @@ final class AppState: ObservableObject {
     private var isShuttingDown = false
     private var lastResetCreditsRefreshAt: Date?
     private let now: () -> Date
+    private let runtimeUpdateChecker: RuntimeUpdateChecking
+    private let runtimeUpgradeExecutor: RuntimeUpgradeExecuting
+    private let runtimeUpdateDefaults = UserDefaults.standard
 
     /// 注入状态客户端和低额度展示器，便于隔离系统通知并测试阈值行为。
     init(
@@ -56,6 +62,8 @@ final class AppState: ObservableObject {
         newAPIRuntime: NewAPIServiceRuntimeProtocol = NewAPIServiceRuntime(),
         newAPIChannelProvisioner: NewAPICPAChannelProvisioning = BundledNewAPICPAChannelProvisioner(),
         usageAlertPresenter: UsageAlertPresenting? = nil,
+        runtimeUpdateChecker: RuntimeUpdateChecking = URLSessionRuntimeUpdateChecker(),
+        runtimeUpgradeExecutor: RuntimeUpgradeExecuting = BundledRuntimeUpgradeExecutor(),
         now: @escaping () -> Date = Date.init
     ) {
         self.client = client
@@ -63,6 +71,8 @@ final class AppState: ObservableObject {
         self.newAPIRuntime = newAPIRuntime
         self.newAPIChannelProvisioner = newAPIChannelProvisioner
         self.usageAlertPresenter = usageAlertPresenter ?? DisabledUsageAlertPresenter()
+        self.runtimeUpdateChecker = runtimeUpdateChecker
+        self.runtimeUpgradeExecutor = runtimeUpgradeExecutor
         self.now = now
         self.deletedAccounts = DeletedAccountStore.load()
     }
@@ -95,6 +105,35 @@ final class AppState: ObservableObject {
     /// 提前准备系统通知权限，避免首次低额度事件只出现授权提示。
     func prepareUsageAlerts() {
         usageAlertPresenter.prepare()
+    }
+
+    /// 异步检查项目兼容清单；网络故障不影响现有服务。
+    func checkForRuntimeUpdates() async {
+        guard !isRuntimeUpdateChecking, !isRuntimeUpgradeInProgress else { return }
+        let key = "runtimeUpdate.lastCheck"
+        if let lastCheck = runtimeUpdateDefaults.object(forKey: key) as? Date,
+           now().timeIntervalSince(lastCheck) < 24 * 60 * 60 { return }
+        runtimeUpdateDefaults.set(now(), forKey: key)
+        isRuntimeUpdateChecking = true
+        defer { isRuntimeUpdateChecking = false }
+        do {
+            let manifest = try await runtimeUpdateChecker.check()
+            if manifest.isInstallable && manifest.isNewer(than: .bundled) { runtimeUpdateManifest = manifest }
+        } catch { }
+    }
+
+    /// 用户确认后执行完整兼容集合升级，并刷新运行时状态。
+    func upgradeRuntime() async {
+        guard let manifest = runtimeUpdateManifest, !isRuntimeUpgradeInProgress else { return }
+        isRuntimeUpgradeInProgress = true
+        defer { isRuntimeUpgradeInProgress = false }
+        do {
+            try await runtimeUpgradeExecutor.upgrade(to: manifest)
+            runtimeUpdateManifest = nil
+            await refreshNewAPIServiceStatus()
+            await refreshCPAServiceStatus()
+            notice = "运行时升级完成。"
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func refresh(apiMode: CodexAuthAPIMode = .automatic) async {
