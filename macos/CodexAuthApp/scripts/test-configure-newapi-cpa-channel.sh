@@ -79,6 +79,10 @@ CREATE TABLE abilities (
     tag TEXT,
     PRIMARY KEY ("group", model, channel_id)
 );
+CREATE TABLE options (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 SQL
     chmod 600 "${runtime_dir}/data/new-api.db"
 }
@@ -109,6 +113,11 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT type || '|' || key || '|' || st
 managed_id="$(/usr/bin/sqlite3 "${db}" "SELECT id FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT group_concat(model, ',') FROM (SELECT model FROM abilities WHERE channel_id=${managed_id} AND \"group\"='default' AND enabled=1 ORDER BY model);")" "${EXPECTED_MODELS}" "Managed ability models"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Managed channel JSON storage"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='RetryTimes';")" "2" "Managed retry count"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Managed automatic disable switch"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableStatusCodes';")" "401,403,429,500-599" "Managed automatic disable statuses"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticRetryStatusCodes';")" "401-407,409-499,500-503,505-523,525-599" "Managed automatic retry statuses"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='channel_affinity_setting.keep_on_channel_disabled';")" "false" "Managed disabled affinity behavior"
 assert_not_contains "${output}" "first-secret" "Create output"
 
 # 模型和 Key 均未变化时必须幂等返回，不产生额外数据库备份。
@@ -116,6 +125,18 @@ backup_count="$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')"
 output="$(run_configurator "${fixture}")"
 assert_equal "$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')" "${backup_count}" "Idempotent backup count"
 assert_not_contains "${output}" "first-secret" "Idempotent output"
+
+# 已有渠道缺失或写错故障转移选项时必须自动修复，同时保留用户的其他选项。
+/usr/bin/sqlite3 "${db}" <<'SQL'
+UPDATE options SET value='0' WHERE key='RetryTimes';
+DELETE FROM options WHERE key='AutomaticDisableChannelEnabled';
+INSERT INTO options(key, value) VALUES('UserCustomOption', 'preserved');
+SQL
+output="$(run_configurator "${fixture}")"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='RetryTimes';")" "2" "Repaired retry count"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Repaired automatic disable switch"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='UserCustomOption';")" "preserved" "User option preservation"
+assert_not_contains "${output}" "first-secret" "Option repair output"
 
 # 用户自建的同地址渠道不能被自动渠道认领或覆盖。
 /usr/bin/sqlite3 "${db}" "INSERT INTO channels(type,key,status,name,base_url,models,\"group\",remark) VALUES(1,'user-secret',1,'User CPA','http://127.0.0.1:8317','user-model','default','User managed');"

@@ -13,6 +13,9 @@ readonly LEGACY_INSTALLER_VERSION="7.2.109"
 readonly LAUNCHCTL_BIN="/bin/launchctl"
 readonly CURL_BIN="/usr/bin/curl"
 readonly CREDENTIAL_HELPER_SOURCE="${SCRIPT_DIR}/cpa-credential-helper.sh"
+readonly MANAGED_REQUEST_RETRY="3"
+readonly MANAGED_MAX_RETRY_CREDENTIALS="3"
+readonly MANAGED_MAX_RETRY_INTERVAL="30"
 
 if [[ $# -ne 2 ]]; then
     echo "Usage: $0 <release-archive> <management-html>" >&2
@@ -146,6 +149,19 @@ auth-dir: '${escaped_auth_dir}'
 
 api-keys:
   - "${api_key}"
+
+request-retry: ${MANAGED_REQUEST_RETRY}
+max-retry-credentials: ${MANAGED_MAX_RETRY_CREDENTIALS}
+max-retry-interval: ${MANAGED_MAX_RETRY_INTERVAL}
+
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+
+routing:
+  strategy: "round-robin"
+  session-affinity: true
+  session-affinity-ttl: "1h"
 EOF
     chmod 600 "${TEMP_CONFIG_PATH}"
 }
@@ -182,6 +198,20 @@ migrate_legacy_owned_configuration() {
         { print }
     ' "${CONFIG_PATH}" > "${TEMP_DIR}/migrated-config.yaml"
     install -m 600 "${TEMP_DIR}/migrated-config.yaml" "${CONFIG_PATH}"
+}
+
+# 仅补齐或修正故障转移字段，不改动用户维护的渠道、Key、模型和其他配置。
+ensure_failover_configuration() {
+    local output_path="${TEMP_DIR}/failover-config.yaml"
+    /usr/bin/sed \
+        -e "s/^request-retry:.*/request-retry: ${MANAGED_REQUEST_RETRY}/" \
+        -e "s/^max-retry-credentials:.*/max-retry-credentials: ${MANAGED_MAX_RETRY_CREDENTIALS}/" \
+        -e "s/^max-retry-interval:.*/max-retry-interval: ${MANAGED_MAX_RETRY_INTERVAL}/" \
+        "${CONFIG_PATH}" > "${output_path}"
+    /usr/bin/grep -q '^request-retry:' "${output_path}" || echo "request-retry: ${MANAGED_REQUEST_RETRY}" >> "${output_path}"
+    /usr/bin/grep -q '^max-retry-credentials:' "${output_path}" || echo "max-retry-credentials: ${MANAGED_MAX_RETRY_CREDENTIALS}" >> "${output_path}"
+    /usr/bin/grep -q '^max-retry-interval:' "${output_path}" || echo "max-retry-interval: ${MANAGED_MAX_RETRY_INTERVAL}" >> "${output_path}"
+    install -m 600 "${output_path}" "${CONFIG_PATH}"
 }
 
 # 覆盖应用拥有文件前创建带时间的可恢复备份，不备份或改动账号目录。
@@ -325,6 +355,7 @@ if [[ "${existing_installation}" == "false" ]]; then
     install -m 600 "${TEMP_CONFIG_PATH}" "${CONFIG_PATH}"
 else
     migrate_legacy_owned_configuration "${previous_version}"
+    ensure_failover_configuration
     chmod 600 "${CONFIG_PATH}"
 fi
 install -m 600 "${TEMP_CLIENT_PATH}" "${CLIENT_PATH}"

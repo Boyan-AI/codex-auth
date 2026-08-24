@@ -13,11 +13,17 @@ readonly NEWAPI_LABEL="com.codex-auth.newapi"
 readonly USER_HOME="${HOME:?HOME is required}"
 readonly DEFAULT_NEWAPI_RUNTIME_DIR="${USER_HOME}/Library/Application Support/Codex Auth/NewAPI"
 readonly DEFAULT_CPA_CLIENT_PATH="${USER_HOME}/Library/Application Support/Codex Auth/CPA/client.json"
+readonly MANAGED_NEWAPI_RETRY_TIMES="2"
+readonly MANAGED_NEWAPI_DISABLE_STATUS_CODES="401,403,429,500-599"
+readonly MANAGED_NEWAPI_RETRY_STATUS_CODES="401-407,409-499,500-503,505-523,525-599"
 TEMP_ROOT=""
 MODEL_LIST=""
 MODEL_LIST_HEX=""
 MODEL_COUNT="0"
 MODEL_ABILITIES_SQL=""
+
+# 仅由 Codex Auth 管理的 NewAPI 可靠性选项，其他系统选项保持用户所有。
+MANAGED_NEWAPI_OPTION_SQL=""
 
 # 仅清理本次模型发现创建的受保护临时目录。
 cleanup() {
@@ -238,6 +244,17 @@ SQL
     done <<< "${model_hex_lines}"
 }
 
+# 构造 NewAPI 故障转移选项的幂等 SQL，不记录 Key 或上游响应。
+prepare_failover_options() {
+    MANAGED_NEWAPI_OPTION_SQL="INSERT INTO options(key, value) VALUES
+('RetryTimes', '${MANAGED_NEWAPI_RETRY_TIMES}'),
+('AutomaticDisableChannelEnabled', 'true'),
+('AutomaticDisableStatusCodes', '${MANAGED_NEWAPI_DISABLE_STATUS_CODES}'),
+('AutomaticRetryStatusCodes', '${MANAGED_NEWAPI_RETRY_STATUS_CODES}'),
+('channel_affinity_setting.keep_on_channel_disabled', 'false')
+ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+}
+
 # 校验固定版本数据库包含渠道与能力同步所需的全部列。
 validate_schema() {
     local table="$1"
@@ -304,6 +321,22 @@ SQL
     [[ "${count}" == "1" ]]
 }
 
+# 返回 Codex Auth 管理的故障转移选项是否完整且符合期望，避免漏迁移已有安装。
+failover_options_are_current() {
+    local count=""
+    count="$(/usr/bin/sqlite3 "${NEWAPI_DATABASE_PATH}" <<SQL
+SELECT COUNT(*)
+FROM options
+WHERE (key = 'RetryTimes' AND value = '${MANAGED_NEWAPI_RETRY_TIMES}')
+   OR (key = 'AutomaticDisableChannelEnabled' AND value = 'true')
+   OR (key = 'AutomaticDisableStatusCodes' AND value = '${MANAGED_NEWAPI_DISABLE_STATUS_CODES}')
+   OR (key = 'AutomaticRetryStatusCodes' AND value = '${MANAGED_NEWAPI_RETRY_STATUS_CODES}')
+   OR (key = 'channel_affinity_setting.keep_on_channel_disabled' AND value = 'false');
+SQL
+)" || fail 74 "Unable to inspect the managed NewAPI failover options."
+    [[ "${count}" == "5" ]]
+}
+
 # 在一个 SQLite 事务内创建或更新专属渠道及其路由能力。
 upsert_managed_channel() {
     local managed_id="$1"
@@ -332,6 +365,7 @@ SET type = 1,
 WHERE id = ${managed_id};
 DELETE FROM abilities WHERE channel_id = ${managed_id};
 ${ability_sql}
+${MANAGED_NEWAPI_OPTION_SQL}
 COMMIT;
 SQL
     else
@@ -349,6 +383,7 @@ INSERT INTO channels(
     0, 0, 1, '', NULL, '${MANAGED_REMARK}', CAST('{}' AS BLOB), ''
 );
 ${ability_sql}
+${MANAGED_NEWAPI_OPTION_SQL}
 COMMIT;
 SQL
     fi
@@ -382,9 +417,11 @@ main() {
     fetch_model_catalog "${cpa_key}"
     unset cpa_key
     prepare_model_catalog
+    prepare_failover_options
 
     validate_schema channels id type key status name weight created_time base_url models group priority auto_ban remark channel_info settings
     validate_schema abilities group model channel_id enabled priority weight tag
+    validate_schema options key value
 
     local managed_count=""
     local managed_id=""
@@ -397,7 +434,8 @@ main() {
         managed_id="$(/usr/bin/sqlite3 "${NEWAPI_DATABASE_PATH}" \
             "SELECT id FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")"
         [[ "${managed_id}" =~ ^[0-9]+$ ]] || fail 74 "The managed NewAPI channel identifier is invalid."
-        if managed_channel_is_current "${managed_id}" "${key_hex}" "${MODEL_LIST_HEX}" "${MODEL_COUNT}"; then
+        if managed_channel_is_current "${managed_id}" "${key_hex}" "${MODEL_LIST_HEX}" "${MODEL_COUNT}" && \
+            failover_options_are_current; then
             echo "The Codex Auth managed CPA channel is already configured."
             return 0
         fi

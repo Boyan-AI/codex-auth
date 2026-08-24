@@ -48,6 +48,12 @@ When NewAPI is enabled, Codex Auth first requires CPA to be healthy, then stops 
 
 The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather than a plain SQLite text value. The managed-channel configurator therefore stores its empty channel metadata as a valid JSON BLOB; this keeps both the native channel page and the distributor's channel lookup compatible with the release schema.
 
+### Upstream failure handling
+
+The managed NewAPI contract enables bounded upstream failover. `RetryTimes` is set to `2`, so a failed request can try another credential or compatible channel without an unbounded retry loop. NewAPI automatically disables channels for `401`, `403`, `429`, and `500-599` responses, including balance and quota failures such as `403 insufficient balance`; its retry status list also covers the remaining recoverable `4xx` and `5xx` ranges supported by the pinned release. Channel affinity is released when an affiliated channel is disabled so the next attempt can be selected.
+
+For a multi-key channel, NewAPI's native key selector is used first. If no usable key remains, routing proceeds to another enabled channel that supports the requested model and protocol. The managed configurator only controls its own reliability options and leaves user-created channels and unrelated options untouched. When every compatible candidate is disabled or exhausted, NewAPI returns the final error; the caller must then surface that the upstream is unavailable instead of repeatedly retrying the same failed channel.
+
 Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
 
 ## Lifecycle

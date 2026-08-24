@@ -322,6 +322,9 @@ EOF
     run_installer "${home_dir}" "${log_path}" "${state_path}"
 
     /usr/bin/cmp -s "${expected_config}" "${runtime_dir}/config.yaml" || fail "Stopped upgrade rewrote user configuration"
+    assert_contains "${runtime_dir}/config.yaml" "request-retry: 3"
+    assert_contains "${runtime_dir}/config.yaml" "max-retry-credentials: 3"
+    assert_contains "${runtime_dir}/config.yaml" "max-retry-interval: 30"
     assert_not_contains "${log_path}" "bootstrap "
     assert_contains "${log_path}" "disable gui/${USER_ID}/${NEW_LABEL}"
 }
