@@ -115,7 +115,7 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT group_concat(model, ',') FROM (
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Managed channel JSON storage"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='RetryTimes';")" "2" "Managed retry count"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Managed automatic disable switch"
-assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableStatusCodes';")" "401,403,429,500-599" "Managed automatic disable statuses"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableStatusCodes';")" "401,403" "Managed automatic disable statuses"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticRetryStatusCodes';")" "401-407,409-499,500-503,505-523,525-599" "Managed automatic retry statuses"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='channel_affinity_setting.keep_on_channel_disabled';")" "false" "Managed disabled affinity behavior"
 assert_not_contains "${output}" "first-secret" "Create output"
