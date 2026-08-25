@@ -115,10 +115,27 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT group_concat(model, ',') FROM (
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || json_valid(channel_info) FROM channels WHERE id=${managed_id};")" "blob|1" "Managed channel JSON storage"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='RetryTimes';")" "2" "Managed retry count"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Managed automatic disable switch"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticEnableChannelEnabled';")" "true" "Managed automatic enable switch"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableStatusCodes';")" "401,403" "Managed automatic disable statuses"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticRetryStatusCodes';")" "401-407,409-499,500-503,505-523,525-599" "Managed automatic retry statuses"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='channel_affinity_setting.keep_on_channel_disabled';")" "false" "Managed disabled affinity behavior"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_enabled';")" "true" "Managed channel recovery probes"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_minutes';")" "10" "Managed channel recovery interval"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.channel_test_concurrency';")" "1" "Managed channel recovery concurrency"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.channel_test_mode';")" "passive_recovery" "Managed channel recovery mode"
 assert_not_contains "${output}" "first-secret" "Create output"
+
+# 用户在 NewAPI 管理页调整为合法间隔后，后续渠道同步必须保留该值。
+/usr/bin/sqlite3 "${db}" "UPDATE options SET value='15' WHERE key='monitor_setting.auto_test_channel_minutes';"
+output="$(run_configurator "${fixture}")"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_minutes';")" "15" "Preserved custom recovery interval"
+assert_not_contains "${output}" "first-secret" "Custom interval output"
+
+# 缺失、非数字或越界间隔必须回退到安全默认值。
+/usr/bin/sqlite3 "${db}" "UPDATE options SET value='0' WHERE key='monitor_setting.auto_test_channel_minutes';"
+output="$(run_configurator "${fixture}")"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_minutes';")" "10" "Repaired invalid recovery interval"
+assert_not_contains "${output}" "first-secret" "Invalid interval output"
 
 # 模型和 Key 均未变化时必须幂等返回，不产生额外数据库备份。
 backup_count="$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')"
@@ -130,11 +147,15 @@ assert_not_contains "${output}" "first-secret" "Idempotent output"
 /usr/bin/sqlite3 "${db}" <<'SQL'
 UPDATE options SET value='0' WHERE key='RetryTimes';
 DELETE FROM options WHERE key='AutomaticDisableChannelEnabled';
+DELETE FROM options WHERE key='AutomaticEnableChannelEnabled';
+DELETE FROM options WHERE key='monitor_setting.channel_test_mode';
 INSERT INTO options(key, value) VALUES('UserCustomOption', 'preserved');
 SQL
 output="$(run_configurator "${fixture}")"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='RetryTimes';")" "2" "Repaired retry count"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Repaired automatic disable switch"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticEnableChannelEnabled';")" "true" "Repaired automatic enable switch"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.channel_test_mode';")" "passive_recovery" "Repaired channel recovery mode"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='UserCustomOption';")" "preserved" "User option preservation"
 assert_not_contains "${output}" "first-secret" "Option repair output"
 

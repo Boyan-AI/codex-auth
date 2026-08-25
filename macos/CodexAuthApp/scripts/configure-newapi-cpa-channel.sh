@@ -17,6 +17,11 @@ readonly MANAGED_NEWAPI_RETRY_TIMES="2"
 # 仅把鉴权和额度类确定性故障自动禁用；429/5xx/网络抖动交给有限重试，避免临时故障永久停用渠道。
 readonly MANAGED_NEWAPI_DISABLE_STATUS_CODES="401,403"
 readonly MANAGED_NEWAPI_RETRY_STATUS_CODES="401-407,409-499,500-503,505-523,525-599"
+# 使用 NewAPI 原生被动恢复，仅定时探测自动禁用渠道，避免对健康渠道制造探测流量。
+# 间隔默认 10 分钟；用户可在 NewAPI 管理页调整为 1-1440 分钟，后续迁移会保留合法值。
+readonly MANAGED_NEWAPI_RECOVERY_INTERVAL_DEFAULT="10"
+readonly MANAGED_NEWAPI_RECOVERY_CONCURRENCY="1"
+MANAGED_NEWAPI_RECOVERY_INTERVAL_MINUTES=""
 TEMP_ROOT=""
 MODEL_LIST=""
 MODEL_LIST_HEX=""
@@ -250,10 +255,29 @@ prepare_failover_options() {
     MANAGED_NEWAPI_OPTION_SQL="INSERT INTO options(key, value) VALUES
 ('RetryTimes', '${MANAGED_NEWAPI_RETRY_TIMES}'),
 ('AutomaticDisableChannelEnabled', 'true'),
+('AutomaticEnableChannelEnabled', 'true'),
 ('AutomaticDisableStatusCodes', '${MANAGED_NEWAPI_DISABLE_STATUS_CODES}'),
 ('AutomaticRetryStatusCodes', '${MANAGED_NEWAPI_RETRY_STATUS_CODES}'),
-('channel_affinity_setting.keep_on_channel_disabled', 'false')
+('channel_affinity_setting.keep_on_channel_disabled', 'false'),
+('monitor_setting.auto_test_channel_enabled', 'true'),
+('monitor_setting.auto_test_channel_minutes', '${MANAGED_NEWAPI_RECOVERY_INTERVAL_MINUTES}'),
+('monitor_setting.channel_test_concurrency', '${MANAGED_NEWAPI_RECOVERY_CONCURRENCY}'),
+('monitor_setting.channel_test_mode', 'passive_recovery')
 ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+}
+
+# 读取用户配置的被动恢复间隔；缺失或越界时回退到安全默认值。
+resolve_recovery_interval() {
+    local configured_interval=""
+    configured_interval="$(/usr/bin/sqlite3 "${NEWAPI_DATABASE_PATH}" \
+        "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_minutes' LIMIT 1;")" || \
+        fail 74 "Unable to inspect the NewAPI recovery interval."
+    if [[ "${configured_interval}" =~ ^[1-9][0-9]{0,3}$ ]] && \
+        (( 10#${configured_interval} <= 1440 )); then
+        MANAGED_NEWAPI_RECOVERY_INTERVAL_MINUTES="${configured_interval}"
+    else
+        MANAGED_NEWAPI_RECOVERY_INTERVAL_MINUTES="${MANAGED_NEWAPI_RECOVERY_INTERVAL_DEFAULT}"
+    fi
 }
 
 # 校验固定版本数据库包含渠道与能力同步所需的全部列。
@@ -330,12 +354,17 @@ SELECT COUNT(*)
 FROM options
 WHERE (key = 'RetryTimes' AND value = '${MANAGED_NEWAPI_RETRY_TIMES}')
    OR (key = 'AutomaticDisableChannelEnabled' AND value = 'true')
+   OR (key = 'AutomaticEnableChannelEnabled' AND value = 'true')
    OR (key = 'AutomaticDisableStatusCodes' AND value = '${MANAGED_NEWAPI_DISABLE_STATUS_CODES}')
    OR (key = 'AutomaticRetryStatusCodes' AND value = '${MANAGED_NEWAPI_RETRY_STATUS_CODES}')
-   OR (key = 'channel_affinity_setting.keep_on_channel_disabled' AND value = 'false');
+   OR (key = 'channel_affinity_setting.keep_on_channel_disabled' AND value = 'false')
+   OR (key = 'monitor_setting.auto_test_channel_enabled' AND value = 'true')
+   OR (key = 'monitor_setting.auto_test_channel_minutes' AND value = '${MANAGED_NEWAPI_RECOVERY_INTERVAL_MINUTES}')
+   OR (key = 'monitor_setting.channel_test_concurrency' AND value = '${MANAGED_NEWAPI_RECOVERY_CONCURRENCY}')
+   OR (key = 'monitor_setting.channel_test_mode' AND value = 'passive_recovery');
 SQL
 )" || fail 74 "Unable to inspect the managed NewAPI failover options."
-    [[ "${count}" == "5" ]]
+    [[ "${count}" == "10" ]]
 }
 
 # 在一个 SQLite 事务内创建或更新专属渠道及其路由能力。
@@ -418,11 +447,12 @@ main() {
     fetch_model_catalog "${cpa_key}"
     unset cpa_key
     prepare_model_catalog
+    validate_schema options key value
+    resolve_recovery_interval
     prepare_failover_options
 
     validate_schema channels id type key status name weight created_time base_url models group priority auto_ban remark channel_info settings
     validate_schema abilities group model channel_id enabled priority weight tag
-    validate_schema options key value
 
     local managed_count=""
     local managed_id=""
