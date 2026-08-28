@@ -117,7 +117,7 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='R
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableChannelEnabled';")" "true" "Managed automatic disable switch"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticEnableChannelEnabled';")" "true" "Managed automatic enable switch"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticDisableStatusCodes';")" "401,403" "Managed automatic disable statuses"
-assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticRetryStatusCodes';")" "401-407,409-499,500-503,505-523,525-599" "Managed automatic retry statuses"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='AutomaticRetryStatusCodes';")" "400-407,409-499,500-503,505-523,525-599" "Managed automatic retry statuses"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='channel_affinity_setting.keep_on_channel_disabled';")" "false" "Managed disabled affinity behavior"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_enabled';")" "true" "Managed channel recovery probes"
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT value FROM options WHERE key='monitor_setting.auto_test_channel_minutes';")" "10" "Managed channel recovery interval"
@@ -172,15 +172,30 @@ assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT typeof(channel_info) || '|' || 
 assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels WHERE name='${MANAGED_NAME}' AND remark='${MANAGED_REMARK}';")" "1" "Idempotent managed channel count"
 assert_not_contains "${output}" "second-secret" "Update output"
 
-# 缺少最低健康模型时必须在数据库写入前失败。
+# 有效目录缺失默认模型时仍应完成渠道同步，让 NewAPI 继续选择其他兼容渠道。
 fixture="${TEST_ROOT}/missing-managed-model"
 create_fixture "${fixture}" "minimum-model-secret"
 printf '%s\n' '{"data":[{"id":"gpt-5.6-terra"}]}' > "${fixture}/CPA/models.json"
-if output="$(run_configurator "${fixture}" 2>&1)"; then
-    fail "A CPA catalog without the managed model was accepted."
-fi
-assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM channels;")" "0" "Missing managed model write count"
+output="$(run_configurator "${fixture}")"
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM channels;")" "1" "Missing managed model channel count"
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT models FROM channels;")" "gpt-5.6-terra" "Missing managed model channel catalog"
+assert_equal "$(/usr/bin/sqlite3 "$(database_path "${fixture}")" "SELECT COUNT(*) FROM abilities;")" "1" "Missing managed model ability count"
 assert_not_contains "${output}" "minimum-model-secret" "Missing managed model output"
+
+# 合法空目录也必须保留托管渠道但不声明任何能力，避免阻断其他 NewAPI 渠道的接管。
+fixture="${TEST_ROOT}/empty-catalog"
+create_fixture "${fixture}" "empty-catalog-secret"
+printf '%s\n' '{"data":[]}' > "${fixture}/CPA/models.json"
+output="$(run_configurator "${fixture}")"
+db="$(database_path "${fixture}")"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM channels;")" "1" "Empty catalog channel count"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT models FROM channels;")" "" "Empty catalog channel models"
+assert_equal "$(/usr/bin/sqlite3 "${db}" "SELECT COUNT(*) FROM abilities;")" "0" "Empty catalog ability count"
+assert_not_contains "${output}" "empty-catalog-secret" "Empty catalog output"
+empty_backup_count="$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')"
+output="$(run_configurator "${fixture}")"
+assert_equal "$(find "${fixture}/NewAPI/backups" -type f | wc -l | tr -d ' ')" "${empty_backup_count}" "Empty catalog idempotent backup count"
+assert_not_contains "${output}" "empty-catalog-secret" "Empty catalog idempotent output"
 
 # 含逗号的模型无法安全写入 NewAPI 逗号分隔字段，必须关闭失败。
 fixture="${TEST_ROOT}/unsafe-model"

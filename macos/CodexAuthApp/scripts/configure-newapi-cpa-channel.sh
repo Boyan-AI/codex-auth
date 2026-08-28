@@ -5,7 +5,6 @@ set -euo pipefail
 readonly EXPECTED_NEWAPI_VERSION="v1.0.0-rc.25"
 readonly MANAGED_NAME="Codex Auth CPA"
 readonly MANAGED_REMARK="Managed by Codex Auth. Uses the local CPA default API key."
-readonly REQUIRED_MANAGED_MODEL="gpt-5.6-sol"
 readonly MANAGED_GROUP="default"
 readonly EXPECTED_CPA_BASE_URL="http://127.0.0.1:8317/v1"
 readonly CHANNEL_BASE_URL="http://127.0.0.1:8317"
@@ -16,7 +15,7 @@ readonly DEFAULT_CPA_CLIENT_PATH="${USER_HOME}/Library/Application Support/Codex
 readonly MANAGED_NEWAPI_RETRY_TIMES="2"
 # 仅把鉴权和额度类确定性故障自动禁用；429/5xx/网络抖动交给有限重试，避免临时故障永久停用渠道。
 readonly MANAGED_NEWAPI_DISABLE_STATUS_CODES="401,403"
-readonly MANAGED_NEWAPI_RETRY_STATUS_CODES="401-407,409-499,500-503,505-523,525-599"
+readonly MANAGED_NEWAPI_RETRY_STATUS_CODES="400-407,409-499,500-503,505-523,525-599"
 # 使用 NewAPI 原生被动恢复，仅定时探测自动禁用渠道，避免对健康渠道制造探测流量。
 # 间隔默认 10 分钟；用户可在 NewAPI 管理页调整为 1-1440 分钟，后续迁移会保留合法值。
 readonly MANAGED_NEWAPI_RECOVERY_INTERVAL_DEFAULT="10"
@@ -154,7 +153,6 @@ prepare_model_catalog() {
     local catalog_is_valid=""
     local invalid_entry_count=""
     local unsafe_model_count=""
-    local required_model_count=""
     local model_hex_lines=""
     catalog_path_hex="$(hex_encode "${CPA_MODELS_PATH}")"
     catalog_is_valid="$(/usr/bin/sqlite3 ':memory:' <<SQL
@@ -208,7 +206,7 @@ WITH document(value) AS (
 SELECT group_concat(model, ',') FROM (SELECT model FROM models ORDER BY model COLLATE BINARY);
 SQL
 )" || fail 78 "Unable to normalize the managed CPA model catalog."
-    [[ -n "${MODEL_LIST}" ]] || fail 78 "The managed CPA model catalog is empty."
+    # 目标模型缺失时保留空/部分能力，让 NewAPI 继续负责跨渠道降级选择。
     MODEL_LIST_HEX="$(hex_encode "${MODEL_LIST}")"
     MODEL_COUNT="$(/usr/bin/sqlite3 ':memory:' <<SQL
 WITH document(value) AS (
@@ -219,18 +217,7 @@ FROM document, json_each(document.value, '$.data') AS item
 WHERE trim(json_extract(item.value, '$.id'), char(9) || char(10) || char(13) || ' ') != '';
 SQL
 )" || fail 78 "Unable to count the managed CPA models."
-    [[ "${MODEL_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail 78 "The managed CPA model count is invalid."
-    required_model_count="$(/usr/bin/sqlite3 ':memory:' <<SQL
-WITH document(value) AS (
-    SELECT CAST(readfile(CAST(X'${catalog_path_hex}' AS TEXT)) AS TEXT)
-)
-SELECT COUNT(*)
-FROM document, json_each(document.value, '$.data') AS item
-WHERE trim(json_extract(item.value, '$.id'), char(9) || char(10) || char(13) || ' ') = '${REQUIRED_MANAGED_MODEL}';
-SQL
-)" || fail 78 "Unable to validate the required managed CPA model."
-    [[ "${required_model_count}" -ge 1 ]] || \
-        fail 78 "The managed CPA model catalog does not contain ${REQUIRED_MANAGED_MODEL}."
+    [[ "${MODEL_COUNT}" =~ ^[0-9]+$ ]] || fail 78 "The managed CPA model count is invalid."
 
     model_hex_lines="$(/usr/bin/sqlite3 ':memory:' <<SQL
 WITH document(value) AS (
@@ -329,7 +316,7 @@ WHERE c.id = ${managed_id}
   AND COALESCE(c.weight, 0) = 0
   AND (SELECT COUNT(*) FROM abilities a WHERE a.channel_id = c.id) = ${model_count}
   AND (
-      SELECT group_concat(model, ',')
+      SELECT COALESCE(group_concat(model, ','), '')
       FROM (
           SELECT a.model
           FROM abilities a
