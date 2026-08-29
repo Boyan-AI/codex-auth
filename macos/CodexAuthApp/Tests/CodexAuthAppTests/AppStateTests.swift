@@ -95,8 +95,8 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.isNewAPIEnabled)
     }
 
-    /// 验证专属渠道同步失败时不切换 NewAPI 路由并停止已启动的 CPA。
-    func testEnableNewAPIProvisioningFailureRollsBackWithoutEnablingRoute() async {
+    /// 验证专属渠道同步失败时仍切换 NewAPI 路由，等待渠道后续恢复。
+    func testEnableNewAPIProvisioningFailureDoesNotBlockRoute() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
         let cpaRuntime = StubCPAServiceRuntime(operations: operations)
@@ -116,18 +116,16 @@ final class AppStateTests: XCTestCase {
             "service-start",
             "newapi-stop",
             "newapi-provision",
-            "newapi-route-disable",
-            "newapi-status",
-            "service-stop",
-            "newapi-status",
+            "newapi-start",
+            "newapi-route-enable",
         ])
-        XCTAssertFalse(appState.isNewAPIEnabled)
-        XCTAssertEqual(newAPIRuntime.currentStatus, .stopped)
-        XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
+        XCTAssertTrue(appState.isNewAPIEnabled)
+        XCTAssertEqual(newAPIRuntime.currentStatus, .running)
+        XCTAssertEqual(cpaRuntime.currentStatus, .running)
     }
 
-    /// 验证 CPA 上游失败时不启动或提交 NewAPI 路由，并保持手动直连。
-    func testEnableNewAPIRollsBackToDirectWhenRequiredCPAUpstreamFails() async {
+    /// 验证 CPA 上游失败时仍可提交 NewAPI 路由，并仅标记 CPA 渠道不可用。
+    func testEnableNewAPIContinuesWhenCPAUpstreamFails() async {
         let operations = OperationRecorder()
         let client = StubCodexAuthClient(state: makeState(route: .direct), operations: operations)
         let cpaRuntime = StubCPAServiceRuntime(operations: operations)
@@ -139,15 +137,14 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(operations.values, [
             "service-start",
-            "newapi-route-disable",
-            "newapi-status",
-            "service-stop",
-            "newapi-status",
+            "newapi-stop",
+            "newapi-start",
+            "newapi-route-enable",
         ])
-        XCTAssertFalse(appState.isNewAPIEnabled)
-        XCTAssertEqual(newAPIRuntime.currentStatus, .stopped)
+        XCTAssertTrue(appState.isNewAPIEnabled)
+        XCTAssertEqual(newAPIRuntime.currentStatus, .running)
         XCTAssertEqual(cpaRuntime.currentStatus, .stopped)
-        XCTAssertTrue(appState.errorMessage?.contains("CPA offline") == true)
+        XCTAssertNil(appState.errorMessage)
     }
 
     /// 验证 NewAPI 关闭先恢复直连，再停 NewAPI 和 CPA。
@@ -724,6 +721,18 @@ final class StubCPAServiceRuntime: CPAServiceRuntimeProtocol {
         self.currentStatus = status
     }
 
+    func startForRouting() async throws -> CPAConfiguration {
+        operations?.values.append("service-start")
+        if let startGate { await startGate.suspend() }
+        if let startError { throw startError }
+        currentStatus = .running
+        return try CPAConfiguration(
+            baseURLString: CPAConfiguration.defaultBaseURL,
+            apiKey: "client-key",
+            clientConfigurationURL: URL(fileURLWithPath: "/tmp/client.json")
+        )
+    }
+
     func startAndValidate() async throws -> CPAConfiguration {
         operations?.values.append("service-start")
         if let startGate { await startGate.suspend() }
@@ -764,6 +773,18 @@ final class StubNewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
     init(operations: OperationRecorder? = nil, status: NewAPIServiceStatus = .stopped) {
         self.operations = operations
         self.currentStatus = status
+    }
+
+    func startForRouting() async throws -> NewAPIConfiguration {
+        operations?.values.append("newapi-start")
+        if let startError { throw startError }
+        currentStatus = .running
+        return try NewAPIConfiguration(
+            baseURLString: NewAPIConfiguration.defaultBaseURL,
+            apiKey: "client-key",
+            runtimeVersion: NewAPIInstallationPaths.expectedRuntimeVersion,
+            clientConfigurationURL: URL(fileURLWithPath: "/tmp/NewAPI/client.json")
+        )
     }
 
     func startAndValidate() async throws -> NewAPIConfiguration {

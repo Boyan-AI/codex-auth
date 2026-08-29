@@ -578,6 +578,8 @@ struct SystemNewAPIBrowser: NewAPIBrowserOpening {
 
 /// 定义 AppState 编排 NewAPI 生命周期所需的稳定接口。
 protocol NewAPIServiceRuntimeProtocol {
+    /// 启动 NewAPI 并返回静态配置，不访问健康、初始化或模型接口。
+    func startForRouting() async throws -> NewAPIConfiguration
     func startAndValidate() async throws -> NewAPIConfiguration
     func stop() async throws
     func status() async -> NewAPIServiceStatus
@@ -628,6 +630,13 @@ struct NewAPIServiceRuntime: NewAPIServiceRuntimeProtocol {
         self.credentialHelperIsExecutable = credentialHelperIsExecutable
         self.startupRetryDelaysNanoseconds = startupRetryDelaysNanoseconds
         self.sleep = sleep
+    }
+
+    /// 仅加载静态配置并启动服务，健康检查由显式校验流程负责。
+    func startForRouting() async throws -> NewAPIConfiguration {
+        let configuration = try validatedInstalledConfiguration()
+        try await serviceController.start()
+        return configuration
     }
 
     /// 启动服务，等待匿名端点就绪，再要求完成初始化并校验调用 Token。

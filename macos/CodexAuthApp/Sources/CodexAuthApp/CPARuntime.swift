@@ -807,6 +807,8 @@ struct SystemCPAClipboard: CPAClipboardWriting {
 }
 
 protocol CPAServiceRuntimeProtocol {
+    /// 启动 CPA 并返回静态配置，不访问模型接口或管理 API。
+    func startForRouting() async throws -> CPAConfiguration
     func startAndValidate() async throws -> CPAConfiguration
     func stop() async throws
     func status() async -> CPAServiceStatus
@@ -868,6 +870,13 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         self.clipboard = clipboard
         self.startupRetryDelaysNanoseconds = startupRetryDelaysNanoseconds
         self.sleep = sleep
+    }
+
+    /// 仅加载静态配置并启动服务，健康检查由显式校验流程负责。
+    func startForRouting() async throws -> CPAConfiguration {
+        let configuration = try configurationProvider.load()
+        try await serviceController.start()
+        return configuration
     }
 
     /// 复用健康的已加载服务；端口异常时受控重启，再锁定配置契约并检查模型端点。

@@ -75,16 +75,18 @@ The validation parser accepts only the installer-owned YAML representation. Unsu
 
 The managed CPA configuration enables bounded credential failover: request retries are limited to 3, credential retries are limited to 3, and the retry interval is capped at 30 seconds. CPA first tries another compatible Key/credential, then another eligible channel according to its routing policy. A valid CPA model catalog may temporarily omit the current Codex model; the managed NewAPI channel then exposes only the models CPA reports, while NewAPI remains able to select a compatible fallback channel for the omitted model. When CPA is itself behind the managed NewAPI channel, a `400` model-compatibility failure remains eligible for NewAPI's bounded retry so that, after CPA candidates are exhausted, NewAPI can select another enabled channel that supports the requested model. Channels configured with `auto_ban` are temporarily disabled after deterministic upstream failures such as exhausted balance, invalid credentials, or repeated rate/transport failures. Session affinity does not disable failover; it only preserves the selected healthy credential while it remains usable. If the request has already emitted response content, CPA does not replay it after a mid-stream failure.
 
+CPA is an optional NewAPI channel. Its service, account, model, and network health do not prevent NewAPI from becoming the active global provider; failures only make this channel unavailable until recovery.
+
 ## Service Lifecycle
 
 CPA is a user-level LaunchAgent. In the NewAPI workbench, quitting Codex Auth restores direct routing and stops both NewAPI and CPA. Legacy CPA-only lifecycle behavior below remains documented for compatibility.
 
 Enable order:
 
-1. Enable and start the LaunchAgent.
+1. Enable and start the LaunchAgent when the user explicitly enables CPA or when NewAPI starts its managed channel.
 2. Validate the fixed loopback address, Management API configuration, runtime version, client Key registration, credential helper, and panel asset.
 3. Send the client Key only to the validated loopback model endpoint and verify health.
-4. Select the global CPA provider.
+4. Keep CPA as an optional NewAPI channel; a failed health check does not prevent NewAPI from becoming the active global provider.
 
 If any enable step fails, the app restores direct routing and attempts to stop and disable CPA. Disable order is intentionally reversed: restore direct routing first, then stop and disable the service. This prevents newly started Codex processes from pointing at an unavailable local endpoint.
 

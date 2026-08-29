@@ -44,7 +44,7 @@ The SQLite database belongs to NewAPI and closes with the NewAPI process. There 
 5. Paste that Token once into Codex Auth settings and save it.
 6. Enable NewAPI from the menu bar.
 
-When NewAPI is enabled, Codex Auth first requires CPA to be healthy, then stops NewAPI before touching its SQLite database. The channel configurator verifies the pinned runtime schema and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and synchronizes every non-empty model returned by the local CPA `/v1/models` endpoint into both `channels.models` and `abilities`. Model identifiers are de-duplicated and ordered deterministically. A valid CPA catalog may omit `gpt-5.6-sol` (or be empty); in that case the managed channel declares only its reported capabilities, allowing NewAPI to select another compatible channel instead of aborting startup. The aggregate NewAPI model catalog is still required to contain `gpt-5.6-sol` before the Codex route changes. A user-created channel is never adopted by matching its URL or Key. An unavailable or malformed CPA catalog, an unsafe identifier that NewAPI cannot represent, schema drift, or ambiguous application-owned rows fails closed before the Codex route changes.
+When NewAPI is enabled, Codex Auth starts NewAPI independently and treats CPA as one optional managed channel. It attempts to start CPA and synchronize the channel, but CPA account, model, Token, or network availability never blocks the NewAPI route change. The channel configurator verifies the pinned runtime schema and creates or updates only the channel whose name and remark match the application-owned contract. The channel uses the CPA client Key from the protected CPA configuration, belongs to the `default` group, and synchronizes every non-empty model returned by the local CPA `/v1/models` endpoint into both `channels.models` and `abilities`. Model identifiers are de-duplicated and ordered deterministically. A valid CPA catalog may omit `gpt-5.6-sol` (or be empty); in that case the managed channel declares only its reported capabilities, allowing NewAPI to select another compatible channel. If CPA is unavailable, the existing managed channel is preserved when possible and the route still switches to NewAPI; the next channel synchronization can repair it. A user-created channel is never adopted by matching its URL or Key. Static safety failures such as an unsafe identifier, schema drift, or ambiguous application-owned rows are reported as channel-sync failures and do not stop NewAPI itself; NewAPI runtime or route-write failures still fail closed.
 
 The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather than a plain SQLite text value. The managed-channel configurator therefore stores its empty channel metadata as a valid JSON BLOB; this keeps both the native channel page and the distributor's channel lookup compatible with the release schema.
 
@@ -60,10 +60,10 @@ Codex Auth never stores the NewAPI administrator password. The calling Token is 
 
 Enable order:
 
-1. Start and validate CPA as the required managed upstream.
-2. Stop NewAPI, synchronize the complete CPA model catalog into the application-owned channel, and restart NewAPI.
-3. Validate NewAPI's status endpoint, administrator setup, credential helper, calling Token, and aggregate availability of the managed model.
-4. Patch Codex configuration to use `codex_auth_newapi` and persist `global_route = "newapi"`.
+1. Start CPA on a best-effort basis as the optional managed upstream.
+2. Stop NewAPI and attempt to synchronize the application-owned CPA channel; an unavailable CPA only skips this attempt.
+3. Start NewAPI and apply the `codex_auth_newapi` provider route without waiting for CPA, Token, or model health.
+4. Persist `global_route = "newapi"`; health and channel recovery are reported asynchronously.
 
 Disable and quit order:
 

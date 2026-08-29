@@ -563,11 +563,21 @@ final class AppState: ObservableObject {
         newAPIServiceStatus = .starting
 
         do {
-            _ = try await cpaRuntime.startAndValidate()
-            cpaServiceStatus = .running
+            // CPA 是 NewAPI 的一个可选渠道；只启动并建立静态绑定，不以其健康状态阻断总路由。
+            do {
+                _ = try await cpaRuntime.startForRouting()
+                cpaServiceStatus = .running
+            } catch {
+                cpaServiceStatus = await cpaRuntime.status()
+            }
             try await newAPIRuntime.stop()
-            try await newAPIChannelProvisioner.configure()
-            let configuration = try await newAPIRuntime.startAndValidate()
+            // CPA 暂时不可用时跳过本次模型同步，保留已有托管渠道或等待后续恢复。
+            do {
+                try await newAPIChannelProvisioner.configure()
+            } catch {
+                cpaServiceStatus = await cpaRuntime.status()
+            }
+            let configuration = try await newAPIRuntime.startForRouting()
             let updatedState = try await client.enableNewAPIRoute(
                 baseURL: configuration.baseURL.absoluteString,
                 clientConfigurationPath: configuration.clientConfigurationURL.path
