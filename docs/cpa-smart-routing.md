@@ -94,7 +94,7 @@ On app launch, the persisted `global_route` is reconciled with launchd and the i
 
 ## Management Page
 
-The native panel opens in the system browser at `http://127.0.0.1:8317/management.html` only after the service and runtime contract are healthy. The Management Key is never placed in the URL. The menu and routing page expose a separate explicit copy action so the user can authenticate in the panel.
+The native panel opens in the system browser at `http://127.0.0.1:8317/management.html` only after the service and runtime contract are healthy. The Management Key is never placed in the URL. Opening the panel automatically copies the key from the protected local file to the system clipboard so the login field can be completed with a paste; the menu and routing page also expose a separate explicit copy action as a fallback.
 
 Codex Auth installs CPA Manager Plus `1.11.11-codex-auth.1`, based on upstream `v1.11.11`, from the dedicated fork tag [`codex-auth-ui-v1.11.11.1`](https://github.com/Boyan-AI/CPA-Manager-Plus/releases/tag/codex-auth-ui-v1.11.11.1). The installer pins the versioned Darwin arm64 asset and verifies SHA-256 `b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795` before replacing the managed binary.
 

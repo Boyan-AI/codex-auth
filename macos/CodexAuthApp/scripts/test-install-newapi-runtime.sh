@@ -68,7 +68,7 @@ create_fixtures() {
     cat > "${BINARY_PATH}" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-rc.25}"
+    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.1}"
 fi
 exit 0
 EOF
@@ -149,7 +149,7 @@ run_installer() {
     FAKE_LAUNCHCTL_LOG="${log_path}" \
     FAKE_LAUNCHCTL_STATE="${state_path}" \
     FAKE_NEWAPI_STATUS="${FAKE_NEWAPI_STATUS:-200}" \
-    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-rc.25}" \
+    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.1}" \
         "${PATCHED_INSTALLER}" "${BINARY_PATH}"
 }
 
@@ -182,7 +182,7 @@ test_rejects_unexpected_version_output() {
     : > "${log_path}"
     : > "${state_path}"
 
-    if FAKE_NEWAPI_VERSION="v9.9.9" run_installer "${home_dir}" "${log_path}" "${state_path}" \
+    if FAKE_NEWAPI_VERSION="v0.0.0" run_installer "${home_dir}" "${log_path}" "${state_path}" \
         >/dev/null 2>&1; then
         fail "Unexpected NewAPI version output was accepted"
     fi
@@ -200,9 +200,9 @@ test_fresh_install_is_stopped() {
     : > "${log_path}"
     : > "${state_path}"
 
-    FAKE_NEWAPI_VERSION="v0.0.0" run_installer "${home_dir}" "${log_path}" "${state_path}"
+    run_installer "${home_dir}" "${log_path}" "${state_path}"
 
-    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-rc.25" "NewAPI version"
+    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.1" "NewAPI version"
     assert_file_exists "${runtime_dir}/bin/new-api"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-service"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-credential"

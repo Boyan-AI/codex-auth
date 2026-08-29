@@ -480,9 +480,10 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:18317/management.html")!])
     }
 
-    /// 验证管理页只在健康检查通过后打开，且 URL 不携带任何密钥。
+    /// 验证打开管理页会自动准备密钥，但 URL 仍不携带任何密钥。
     func testRuntimeOpensManagementPageWithoutSecretInURL() async throws {
         let browser = RecordingCPABrowser()
+        let clipboard = RecordingCPAClipboard()
         let managerService = StubCPAServiceController()
         let runtime = CPAServiceRuntime(
             serviceController: StubCPAServiceController(),
@@ -492,7 +493,8 @@ final class CPARuntimeTests: XCTestCase {
             contractChecker: AcceptingCPAContractChecker(),
             managerConfigurationProvider: FixedCPAManagerConfigurationProvider(),
             managerHealthChecker: SuccessfulCPAManagerHealthChecker(),
-            browser: browser
+            browser: browser,
+            clipboard: clipboard
         )
 
         try await runtime.openManagementPage()
@@ -500,6 +502,7 @@ final class CPARuntimeTests: XCTestCase {
         XCTAssertEqual(managerService.calls, ["start"])
         XCTAssertEqual(browser.openedURLs, [URL(string: "http://127.0.0.1:18317/management.html")!])
         XCTAssertFalse(browser.openedURLs[0].absoluteString.contains("client-key"))
+        XCTAssertEqual(clipboard.values, ["cpamp-admin-key"])
     }
 
     /// 验证管理密钥只在用户显式复制时写入剪贴板。

@@ -159,7 +159,7 @@ struct NewAPIConfiguration: Equatable {
 /// 统一 NewAPI 安装目录、固定版本和 LaunchAgent 标签。
 enum NewAPIInstallationPaths {
     static let launchAgentLabel = "com.codex-auth.newapi"
-    static let expectedRuntimeVersion = "v1.0.0-rc.25"
+    static let expectedRuntimeVersion = "v1.0.0-codex-auth.1"
 
     /// 返回应用支持目录中的 NewAPI 运行根目录。
     static func runtimeRootURL(fileManager: FileManager = .default) -> URL {

@@ -3,9 +3,8 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly EXPECTED_NEWAPI_VERSION="v1.0.0-rc.25"
-readonly EXPECTED_NEWAPI_SHA256="c287e317f5bbd8112e24af40523525a330a933047082e61308a1b8603d7e485e"
-readonly OFFICIAL_UNSTAMPED_VERSION_OUTPUT="v0.0.0"
+readonly EXPECTED_NEWAPI_VERSION="v1.0.0-codex-auth.1"
+readonly EXPECTED_NEWAPI_SHA256="e8d473931c71532aeb135cf0d5e958c67e5041ee539bd8bef92d0cd2ab0eec6b"
 readonly LAUNCH_AGENT_LABEL="com.codex-auth.newapi"
 readonly LAUNCHCTL_BIN="/bin/launchctl"
 readonly CURL_BIN="/usr/bin/curl"
@@ -194,9 +193,8 @@ main() {
     chmod 755 "${TEMP_BINARY_PATH}"
     local version_output=""
     version_output="$("${TEMP_BINARY_PATH}" --version 2>&1 || true)"
-    # 官方 rc.25 macOS 资产未注入构建版本并返回 v0.0.0，固定 SHA 仍是资产身份的权威校验。
-    [[ "${version_output}" == "${EXPECTED_NEWAPI_VERSION}" || \
-        "${version_output}" == "${OFFICIAL_UNSTAMPED_VERSION_OUTPUT}" ]] || \
+    # 私有 fork 资产必须同时匹配构建版本和固定摘要，避免误装旧版或同名二进制。
+    [[ "${version_output}" == "${EXPECTED_NEWAPI_VERSION}" ]] || \
         fail 65 "NewAPI binary version mismatch."
 
     local existing_installation="false"

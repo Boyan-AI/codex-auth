@@ -963,17 +963,19 @@ struct CPAServiceRuntime: CPAServiceRuntimeProtocol {
         }
     }
 
-    /// 按需启动 CPAMP，并仅在管理服务健康时打开不含密钥的 Full Mode 页面。
+    /// 按需启动 CPAMP，自动准备管理员密钥后打开不含密钥的 Full Mode 页面。
     func openManagementPage() async throws {
         try await managerServiceController.start()
         let managerConfiguration = try managerConfigurationProvider.load()
         try await validateManagerStartupReadiness(managerConfiguration)
+        // 密钥仍不进入 URL；打开页面时自动复制到剪贴板，避免用户每次查找或手动输入。
+        _ = clipboard.write(managerConfiguration.adminKey)
         guard browser.open(managerConfiguration.managementPageURL) else {
             throw CPARuntimeError.browserOpenFailed
         }
     }
 
-    /// 只在用户触发复制命令时读取并写入 CPAMP 管理员密钥。
+    /// 读取受保护文件中的管理员密钥并写入系统剪贴板。
     func copyManagementKey() throws {
         let managerConfiguration = try managerConfigurationProvider.load()
         guard clipboard.write(managerConfiguration.adminKey) else {

@@ -18,9 +18,9 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
-The managed NewAPI runtime is pinned to `v1.0.0-rc.25` and uses the official macOS binary with SHA-256 `c287e317f5bbd8112e24af40523525a330a933047082e61308a1b8603d7e485e`.
+The managed NewAPI runtime is pinned to the Boyan-AI fork release [`codex-auth-v1.0.0.1`](https://github.com/Boyan-AI/new-api/releases/tag/codex-auth-v1.0.0.1). Its macOS arm64 asset reports `v1.0.0-codex-auth.1` and has SHA-256 `e8d473931c71532aeb135cf0d5e958c67e5041ee539bd8bef92d0cd2ab0eec6b`.
 
-The upstream macOS asset reports `v0.0.0` from `--version` and the public status endpoint because its release build lacks stamped version metadata. The fixed official SHA-256 is therefore the authoritative asset identity; Codex Auth records the managed contract version as `v1.0.0-rc.25`.
+The installer requires both that exact version output and checksum before replacing any managed runtime file. The release asset is available at `https://github.com/Boyan-AI/new-api/releases/download/codex-auth-v1.0.0.1/new-api-macos-v1.0.0-codex-auth.1`; `checksums-macos.txt` is published beside it.
 
 - Runtime root: `~/Library/Application Support/Codex Auth/NewAPI`
 - SQLite database: `data/new-api.db`
@@ -31,7 +31,7 @@ The upstream macOS asset reports `v0.0.0` from `--version` and the public status
 - Management page: `http://127.0.0.1:3000`
 - Codex API Base URL: `http://127.0.0.1:3000/v1`
 
-NewAPI's official native server listens on port `3000` without a loopback-only binding option in this supported contract. Other devices on the same LAN may therefore reach the port when macOS firewall and network policy permit it. This workbench does not configure public Internet access, TLS, a domain, or a reverse proxy.
+NewAPI's native server listens on port `3000` without a loopback-only binding option in this supported contract. Other devices on the same LAN may therefore reach the port when macOS firewall and network policy permit it. This workbench does not configure public Internet access, TLS, a domain, or a reverse proxy.
 
 The SQLite database belongs to NewAPI and closes with the NewAPI process. There is no separate database service to stop. Upgrades preserve the database and the client Token; installer-owned runtime files are backed up before replacement.
 
@@ -53,6 +53,8 @@ The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather tha
 The managed NewAPI contract enables bounded upstream failover. `RetryTimes` is set to `2`, so a failed request can try another credential or compatible channel without an unbounded retry loop. NewAPI automatically disables channels only for deterministic `401` and `403` failures, including balance and quota failures such as `403 insufficient balance`. A `400` model-compatibility failure (for example, a ChatGPT account that does not support the requested Codex model) is also eligible for the bounded retry status list, so NewAPI can continue to another credential or channel after CPA exhausts its own account candidates. Temporary `429`, network, and `5xx` failures remain eligible for later requests and are handled by the bounded retry status list, so a short upstream incident does not permanently quarantine a channel. Channel affinity is released when an affiliated channel is disabled so the next attempt can be selected.
 
 For a multi-key channel, NewAPI's native key selector is used first. If no usable key remains, routing proceeds to another enabled channel that supports the requested model and protocol. The managed configurator enables NewAPI's native passive recovery: automatic channel re-enable is on, background channel tests use concurrency 1, and `passive_recovery` probes only channels that NewAPI auto-disabled after real request failures. The recovery interval defaults to 10 minutes, can be adjusted in NewAPI's native settings from 1 to 1440 minutes, and is preserved by later Codex Auth channel synchronizations. A successful probe restores the channel without an external proxy or direct SQLite state manipulation. This is a fixed-interval native recovery policy, not per-status exponential backoff or a two-success circuit breaker. The managed configurator changes these global reliability options but does not modify user-created channel rows, Keys, models, or manual-disable state. When every compatible candidate is disabled or exhausted, NewAPI returns the final error; the caller must then surface that the upstream is unavailable instead of repeatedly retrying the same failed channel.
+
+The fork extends NewAPI's native multi-key dialog with per-Key aliases and a test action for one selected Key. Aliases are stored against a SHA-256 Key fingerprint so they remain attached after reordering and are removed with the Key. A test sends one real model request through only the selected Key: it disables selector fallback, does not mutate the channel, and does not persist the test model. The native page warns that the request may consume upstream quota and displays only duration and a sanitized success or failure result; neither Codex Auth nor the test response exposes the raw Key or full upstream response.
 
 Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
 

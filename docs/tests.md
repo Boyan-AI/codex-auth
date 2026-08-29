@@ -91,7 +91,7 @@ HOME=/tmp/<task-name> swift test \
 
 The CPA global-routing suites cover schema 6 migration, route persistence, switching the fallback direct connection while CPA remains active, patch-preserving Codex configuration updates, command-backed client Key isolation, environment and macOS proxy rejection (including PAC and CGI environments), direct-only desktop URL sessions, credential-helper installation, service start/stop ordering, startup reconciliation and account-switch mutual exclusion, failure rollback, localhost-only runtime validation, pinned versions and panel assets, explicit Management Key copy, and system-browser management-page opening.
 
-The NewAPI workbench suites cover schema 6 `newapi` compatibility and unknown-route fallback, dedicated provider replacement, Token isolation, fixed runtime installation, SQLite/client-config preservation, service/setup/Token status mapping, optional CPA degradation, enable/disable/quit ordering, failed direct-route restoration, first-setup management-page startup, and collapsed menu health presentation.
+The NewAPI workbench suites cover schema 6 `newapi` compatibility and unknown-route fallback, dedicated provider replacement, Token isolation, fixed fork runtime installation, strict stamped-version and checksum validation, SQLite/client-config preservation, service/setup/Token status mapping, optional CPA degradation, enable/disable/quit ordering, failed direct-route restoration, first-setup management-page startup, and collapsed menu health presentation. Fork-level tests separately cover alias fingerprint persistence and selected-Key real-request isolation.
 
 Validate the isolated CPA installer separately:
 
