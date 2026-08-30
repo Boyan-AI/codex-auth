@@ -1570,9 +1570,9 @@ test "enableCpaCodexRoute writes command authentication without storing the clie
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
-    const client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    const client_path = try fs.path.join(gpa, &.{ codex_home, "CPA", "client.json" });
     defer gpa.free(client_path);
-    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "CPA/bin/codex-auth-cpa-credential" });
+    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "CPA", "bin", "codex-auth-cpa-credential" });
     defer gpa.free(credential_helper_path);
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
@@ -1641,11 +1641,11 @@ test "NewAPI route replaces CPA provider and disable removes managed proxy provi
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
-    const cpa_client_path = try fs.path.join(gpa, &.{ codex_home, "CPA/client.json" });
+    const cpa_client_path = try fs.path.join(gpa, &.{ codex_home, "CPA", "client.json" });
     defer gpa.free(cpa_client_path);
-    const newapi_client_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI/client.json" });
+    const newapi_client_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI", "client.json" });
     defer gpa.free(newapi_client_path);
-    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI/bin/codex-auth-newapi-credential" });
+    const credential_helper_path = try fs.path.join(gpa, &.{ codex_home, "NewAPI", "bin", "codex-auth-newapi-credential" });
     defer gpa.free(credential_helper_path);
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);

@@ -1806,9 +1806,9 @@ test "Scenario: Given CPA global route commands when enabling and disabling then
     defer gpa.free(home_root);
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
-    const client_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/CPA/client.json" });
+    const client_path = try fs.path.join(gpa, &.{ home_root, "Library", "Application Support", "Codex Auth", "CPA", "client.json" });
     defer gpa.free(client_path);
-    const credential_helper_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/CPA/bin/codex-auth-cpa-credential" });
+    const credential_helper_path = try fs.path.join(gpa, &.{ home_root, "Library", "Application Support", "Codex Auth", "CPA", "bin", "codex-auth-cpa-credential" });
     defer gpa.free(credential_helper_path);
 
     const enable_result = try runCliWithIsolatedHome(
@@ -1862,9 +1862,9 @@ test "Scenario: Given NewAPI global route commands when enabling and disabling t
     defer gpa.free(home_root);
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
-    const client_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/NewAPI/client.json" });
+    const client_path = try fs.path.join(gpa, &.{ home_root, "Library", "Application Support", "Codex Auth", "NewAPI", "client.json" });
     defer gpa.free(client_path);
-    const credential_helper_path = try fs.path.join(gpa, &.{ home_root, "Library/Application Support/Codex Auth/NewAPI/bin/codex-auth-newapi-credential" });
+    const credential_helper_path = try fs.path.join(gpa, &.{ home_root, "Library", "Application Support", "Codex Auth", "NewAPI", "bin", "codex-auth-newapi-credential" });
     defer gpa.free(credential_helper_path);
 
     const enable_result = try runCliWithIsolatedHome(
