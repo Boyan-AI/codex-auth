@@ -18,9 +18,9 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
-The managed NewAPI runtime is pinned to the Boyan-AI fork release [`codex-auth-v1.0.0.1`](https://github.com/Boyan-AI/new-api/releases/tag/codex-auth-v1.0.0.1). Its macOS arm64 asset reports `v1.0.0-codex-auth.1` and has SHA-256 `e8d473931c71532aeb135cf0d5e958c67e5041ee539bd8bef92d0cd2ab0eec6b`.
+The managed NewAPI runtime is pinned to the Boyan-AI fork release [`codex-auth-v1.0.0.2`](https://github.com/Boyan-AI/new-api/releases/tag/codex-auth-v1.0.0.2). Its macOS arm64 asset reports `v1.0.0-codex-auth.2` and has SHA-256 `6e82062d0bba9911e33febbb22ec00d47069a6cd81f55bc23ea37f56333f0de1`.
 
-The installer requires both that exact version output and checksum before replacing any managed runtime file. The release asset is available at `https://github.com/Boyan-AI/new-api/releases/download/codex-auth-v1.0.0.1/new-api-macos-v1.0.0-codex-auth.1`; `checksums-macos.txt` is published beside it.
+The installer requires both that exact version output and checksum before replacing any managed runtime file. The release asset is available at `https://github.com/Boyan-AI/new-api/releases/download/codex-auth-v1.0.0.2/new-api-macos-v1.0.0-codex-auth.2`; `checksums-macos.txt` is published beside it.
 
 - Runtime root: `~/Library/Application Support/Codex Auth/NewAPI`
 - SQLite database: `data/new-api.db`
