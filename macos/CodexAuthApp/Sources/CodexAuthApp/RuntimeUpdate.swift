@@ -34,7 +34,7 @@ struct RuntimeUpdateManifest: Codable, Equatable {
             manifestVersion: "2026-09-02.1",
             releaseURL: "https://github.com/Boyan-AI/codex-auth/releases/latest",
             components: [
-                "newapi": RuntimeComponentVersion(version: "v1.0.0-codex-auth.2", assetURL: "", sha256: "6e82062d0bba9911e33febbb22ec00d47069a6cd81f55bc23ea37f56333f0de1"),
+            "newapi": RuntimeComponentVersion(version: "v1.0.0-codex-auth.3", assetURL: "", sha256: "85f40c9d10fd234017fc7ea0c1d5c48f37096cc01118fc586699a01da8d7662c"),
                 "cpa": RuntimeComponentVersion(version: "7.2.120", assetURL: "", sha256: "01ebcb3a683560c91f532fb124ac30edcc68945859e3ddf4880e09f1979ffdee"),
                 "cpamp": RuntimeComponentVersion(version: "1.11.11-codex-auth.1", assetURL: "", sha256: "b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795")
             ]

@@ -6,8 +6,8 @@ final class RuntimeUpdateTests: XCTestCase {
         let manifest = try RuntimeUpdateManifest.bundled.validated()
         XCTAssertEqual(manifest.schemaVersion, 1)
         XCTAssertEqual(Set(manifest.components.keys), ["newapi", "cpa", "cpamp"])
-        XCTAssertEqual(manifest.components["newapi"]?.version, "v1.0.0-codex-auth.2")
-        XCTAssertEqual(manifest.components["newapi"]?.sha256, "6e82062d0bba9911e33febbb22ec00d47069a6cd81f55bc23ea37f56333f0de1")
+        XCTAssertEqual(manifest.components["newapi"]?.version, "v1.0.0-codex-auth.3")
+        XCTAssertEqual(manifest.components["newapi"]?.sha256, "85f40c9d10fd234017fc7ea0c1d5c48f37096cc01118fc586699a01da8d7662c")
         XCTAssertFalse(manifest.isInstallable)
     }
 
