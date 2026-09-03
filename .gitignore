@@ -1,4 +1,7 @@
 # Zig build artifacts
+.runtime-local/
+runtime/*.dSYM
+runtime/new-api-*
 zig-out/
 .zig-cache/
 dist/
