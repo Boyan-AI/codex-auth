@@ -21,7 +21,8 @@ After modifying any `.zig` file, always run `zig build run -- list` to verify th
 # Automated Desktop Delivery
 
 - After a plan or code task is complete and its normal tests pass, create `.agent/desktop-delivery-ready.json` so the project `Stop` Hook can install, verify, commit, and push the result automatically.
-- The marker must use schema version `1` and contain `base_commit` (the full current `HEAD`), `branch`, a Chinese `<type>: <description>` commit message, and an exact `paths` array containing only files owned by the task.
+- The marker must use top-level field `version: 1` (not `schema_version`), and contain `base_commit` (the full current `HEAD`), `branch`, a Chinese `<type>: <description>` commit message, and an exact `paths` array containing only files owned by the task.
+- When push has not been explicitly authorized, do not create the marker; perform only the approved local install and commit flow.
 - Do not create the marker while implementation or validation is incomplete. Never include unrelated user changes in `paths`.
 - The Hook must use `macos/CodexAuthApp/scripts/install-desktop-app.sh` as the only installation entry point. It must stop before commit or push if the worktree differs from the marker, installation fails, or single-process verification fails.
 - If push fails after a successful commit, keep the marker's `committed_head` recovery state and retry only that exact commit after the external failure is resolved.
