@@ -18,7 +18,7 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
-The managed NewAPI runtime is built from the Boyan-AI fork commit `6a9f7b05`. Its macOS arm64 asset reports `v1.0.0-codex-auth.3` and has SHA-256 `85f40c9d10fd234017fc7ea0c1d5c48f37096cc01118fc586699a01da8d7662c`.
+The managed NewAPI runtime is built from the merged `main` commit `42325da1`, which contains the multi-key branch and the main-branch Responses compatibility fix. Its macOS arm64 asset reports `v1.0.0-codex-auth.3` and has SHA-256 `168c586af9a5931cc96c0046943d56f834ab52f00644f2d5c2a9e7a46221da87`.
 
 The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.3`; a release asset can be published beside the fork commit when distributing it.
 
