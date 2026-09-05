@@ -7,7 +7,7 @@ final class RuntimeUpdateTests: XCTestCase {
         XCTAssertEqual(manifest.schemaVersion, 1)
         XCTAssertEqual(Set(manifest.components.keys), ["newapi", "cpa", "cpamp"])
         XCTAssertEqual(manifest.components["newapi"]?.version, "v1.0.0-codex-auth.3")
-        XCTAssertEqual(manifest.components["newapi"]?.sha256, "168c586af9a5931cc96c0046943d56f834ab52f00644f2d5c2a9e7a46221da87")
+        XCTAssertEqual(manifest.components["newapi"]?.sha256, "ee93d63d1b6d6dce257d1c9ce2f3564fb58d97bf963502019c6cbc4fa7993fb6")
         XCTAssertFalse(manifest.isInstallable)
     }
 
