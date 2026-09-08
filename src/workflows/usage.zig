@@ -300,7 +300,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     if (!usage_api_enabled) {
         state.local_only_mode = true;
         if (try refreshActiveUsageFromLocalSessions(allocator, codex_home, reg)) {
-            if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
+            if (persist_registry) try registry.saveRegistryPreservingRoute(allocator, codex_home, reg);
         }
         return state;
     }
@@ -438,7 +438,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     }
 
     if (persist_registry and registry_changed) {
-        try registry.saveRegistry(allocator, codex_home, reg);
+        try registry.saveRegistryPreservingRoute(allocator, codex_home, reg);
     }
 
     return state;

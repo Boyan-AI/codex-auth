@@ -445,6 +445,11 @@ pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
 }
 
+/// 返回跨 CLI 进程协调注册表读改写的锁文件路径。
+pub fn registryLockPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json.lock" });
+}
+
 pub fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
     const out_len = encoder.calcSize(key.len);

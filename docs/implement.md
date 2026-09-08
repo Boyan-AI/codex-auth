@@ -26,6 +26,7 @@ Managed files:
 - `<codex_home>/auth.json`
 - `<codex_home>/config.toml`
 - `<codex_home>/accounts/registry.json`
+- `<codex_home>/accounts/registry.json.lock` (短时跨 CLI 写入锁)
 - `<codex_home>/accounts/token-usage-cache.json`
 - `<codex_home>/accounts/<account file key>.auth.json`
 - `<codex_home>/accounts/backup/`
@@ -41,6 +42,7 @@ Managed files:
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`.
 - Saving always rewrites `registry.json` into the current schema field set.
+- Registry writes acquire the stable lock file only for the read/merge and atomic replace window; foreground usage refreshes preserve the latest persisted `global_route` so an older refresh snapshot cannot undo a CPA/NewAPI route change.
 
 See [docs/schema-migration.md](./schema-migration.md) for versioning policy and migration rules.
 
@@ -134,6 +136,7 @@ the running machine's local calendar date, so daily totals roll over at local 00
 - The 60-second timer and manual refresh update quota data and then run an incremental Token scan.
 - An incremental Token scan waits for the launch full scan before accessing the shared cache.
 - Generation and state sequence counters prevent stale async results from replacing newer account or Token state.
+- Registry-level locking complements the desktop refresh guards because `gui refresh` and route commands run as separate CLI processes. Usage persistence merges the current global route while route enable/disable commands keep explicit ownership of that field.
 
 CPA does not participate in quota or Token refresh coordination. The desktop app does not read CPA account data or poll CPA request events; Token totals remain derived from local rollout files.
 

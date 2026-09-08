@@ -588,6 +588,72 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
 }
 
+// 验证用量刷新完成时不会覆盖请求期间已经切换的全局 NewAPI 路由。
+test "Scenario: Given NewAPI route changes during foreground usage refresh then the refresh preserves the newer route" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    const RouteMutatingFetcher = struct {
+        var did_mutate = false;
+
+        fn snapshot() registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = 18,
+                    .window_minutes = 300,
+                    .resets_at = 1773491460,
+                },
+                .secondary = .{
+                    .used_percent = 39,
+                    .window_minutes = 10080,
+                    .resets_at = 1773749620,
+                },
+                .credits = null,
+                .plan_type = .team,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
+            if (!did_mutate) {
+                did_mutate = true;
+                const accounts_dir = std.fs.path.dirname(auth_path) orelse return error.InvalidAuthPath;
+                const refresh_home = std.fs.path.dirname(accounts_dir) orelse return error.InvalidAuthPath;
+                var route_update = try registry.loadRegistry(allocator, refresh_home);
+                defer route_update.deinit(allocator);
+                route_update.global_route = .newapi;
+                try registry.saveRegistry(allocator, refresh_home, &route_update);
+            }
+            return .{ .snapshot = snapshot(), .status_code = 200 };
+        }
+    };
+
+    RouteMutatingFetcher.did_mutate = false;
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        RouteMutatingFetcher.fetch,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, reg.global_route);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, loaded.global_route);
+    try std.testing.expect(reg.accounts.items[0].last_usage != null);
+}
+
 test "Scenario: Given active-only foreground usage refresh then only the active account is requested" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

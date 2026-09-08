@@ -68,6 +68,7 @@ pub const hardenSensitiveDir = common.hardenSensitiveDir;
 pub const ensurePrivateDir = common.ensurePrivateDir;
 pub const ensureAccountsDir = common.ensureAccountsDir;
 pub const registryPath = common.registryPath;
+pub const registryLockPath = common.registryLockPath;
 pub const encodedFileKey = common.encodedFileKey;
 pub const keyNeedsFilenameEncoding = common.keyNeedsFilenameEncoding;
 pub const accountFileKey = common.accountFileKey;
@@ -157,6 +158,7 @@ const syncActiveAccountFromAuthWithImporter = account_ops.syncActiveAccountFromA
 
 pub const loadRegistry = storage.loadRegistry;
 pub const saveRegistry = storage.saveRegistry;
+pub const saveRegistryPreservingRoute = storage.saveRegistryPreservingRoute;
 const defaultRegistry = storage.defaultRegistry;
 
 pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {

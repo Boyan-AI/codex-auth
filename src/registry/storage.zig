@@ -54,6 +54,7 @@ const filesEqual = clean.filesEqual;
 const backupDir = clean.backupDir;
 
 pub const saveRegistry = storage_write.saveRegistry;
+pub const saveRegistryPreservingRoute = storage_write.saveRegistryPreservingRoute;
 
 const LegacyAccountRecord = struct {
     email: []u8,

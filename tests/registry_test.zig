@@ -627,6 +627,35 @@ test "registry schema six preserves newapi route and rewrites unknown route to d
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"global_route\": \"direct\"") != null);
 }
 
+test "stale usage registry save preserves a newer global route" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var initial = makeEmptyRegistry();
+    defer initial.deinit(gpa);
+    try registry.saveRegistry(gpa, codex_home, &initial);
+
+    var stale_refresh = try registry.loadRegistry(gpa, codex_home);
+    defer stale_refresh.deinit(gpa);
+
+    var route_update = try registry.loadRegistry(gpa, codex_home);
+    route_update.global_route = .newapi;
+    try registry.saveRegistry(gpa, codex_home, &route_update);
+    route_update.deinit(gpa);
+
+    // 模拟先读取旧路由的额度刷新完成后保存，只允许合并用量字段。
+    try registry.saveRegistryPreservingRoute(gpa, codex_home, &stale_refresh);
+
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, stale_refresh.global_route);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(registry.GlobalRoute.newapi, loaded.global_route);
+}
+
 test "registry schema five ignores and removes legacy smart pool fields" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1926,6 +1955,12 @@ test "clean uses a whitelist and only removes non-current entries under accounts
 
     var preserved_backup = try tmp.dir.openFile("accounts/backups/v2/20260312-063235/registry.json", .{});
     preserved_backup.close();
+
+    var registry_lock = try tmp.dir.openFile("accounts/registry.json.lock", .{});
+    registry_lock.close();
+    const registry_lock_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json.lock" });
+    defer gpa.free(registry_lock_path);
+    try expectModeUnix(registry_lock_path, 0o600);
 }
 
 test "clean preserves account snapshots when registry is missing" {

@@ -215,6 +215,8 @@ pub fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bo
 
 pub fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
     if (std.mem.eql(u8, entry_name, "registry.json")) return true;
+    // 注册表锁文件是跨进程协调所需的基础设施，不能按孤儿快照清理。
+    if (std.mem.eql(u8, entry_name, "registry.json.lock")) return true;
     if (std.mem.eql(u8, entry_name, "backups")) return true;
     return isAllowedCurrentSnapshot(reg, entry_name);
 }
