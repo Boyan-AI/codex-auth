@@ -18,9 +18,9 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
-The managed NewAPI runtime is built from the merged `main` commit `42325da1`, including a fresh frontend build from the same commit so the multi-key management dialog exposes per-key testing. Its macOS arm64 asset reports `v1.0.0-codex-auth.3` and has SHA-256 `ee93d63d1b6d6dce257d1c9ce2f3564fb58d97bf963502019c6cbc4fa7993fb6`.
+The managed NewAPI runtime is built from the Boyan-AI fork commit `72f23e9`, which makes channel tests use the Codex CLI-compatible AnyRouter request contract. Its macOS arm64 asset reports `v1.0.0-codex-auth.4` and has SHA-256 `9cec840a68ca248bfaaff56d4bb35d8eed3d3e105fad558973e254e61687a301`.
 
-The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.3`; a release asset can be published beside the fork commit when distributing it.
+The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.4`; a release asset can be published beside the fork commit when distributing it.
 
 - Runtime root: `~/Library/Application Support/Codex Auth/NewAPI`
 - SQLite database: `data/new-api.db`

@@ -68,7 +68,7 @@ create_fixtures() {
     cat > "${BINARY_PATH}" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.3}"
+    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.4}"
 fi
 exit 0
 EOF
@@ -149,7 +149,7 @@ run_installer() {
     FAKE_LAUNCHCTL_LOG="${log_path}" \
     FAKE_LAUNCHCTL_STATE="${state_path}" \
     FAKE_NEWAPI_STATUS="${FAKE_NEWAPI_STATUS:-200}" \
-    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.3}" \
+    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.4}" \
         "${PATCHED_INSTALLER}" "${BINARY_PATH}"
 }
 
@@ -202,7 +202,7 @@ test_fresh_install_is_stopped() {
 
     run_installer "${home_dir}" "${log_path}" "${state_path}"
 
-    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.3" "NewAPI version"
+    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.4" "NewAPI version"
     assert_file_exists "${runtime_dir}/bin/new-api"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-service"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-credential"

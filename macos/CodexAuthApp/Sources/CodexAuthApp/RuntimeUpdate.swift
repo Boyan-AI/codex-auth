@@ -31,10 +31,10 @@ struct RuntimeUpdateManifest: Codable, Equatable {
     static let bundled: RuntimeUpdateManifest = {
         RuntimeUpdateManifest(
             schemaVersion: 1,
-            manifestVersion: "2026-09-02.1",
+            manifestVersion: "2026-09-15.1",
             releaseURL: "https://github.com/Boyan-AI/codex-auth/releases/latest",
             components: [
-            "newapi": RuntimeComponentVersion(version: "v1.0.0-codex-auth.3", assetURL: "", sha256: "ee93d63d1b6d6dce257d1c9ce2f3564fb58d97bf963502019c6cbc4fa7993fb6"),
+                "newapi": RuntimeComponentVersion(version: "v1.0.0-codex-auth.4", assetURL: "", sha256: "9cec840a68ca248bfaaff56d4bb35d8eed3d3e105fad558973e254e61687a301"),
                 "cpa": RuntimeComponentVersion(version: "7.2.120", assetURL: "", sha256: "01ebcb3a683560c91f532fb124ac30edcc68945859e3ddf4880e09f1979ffdee"),
                 "cpamp": RuntimeComponentVersion(version: "1.11.11-codex-auth.1", assetURL: "", sha256: "b84b6f92819a097b0b3e25a351440a87f239854264b3c06f9fce6c222a315795")
             ]
