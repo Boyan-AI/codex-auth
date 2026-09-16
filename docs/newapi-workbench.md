@@ -81,3 +81,5 @@ If direct-route restoration fails, the app remains running and keeps the service
 Direct mode keeps the account list and the Account, Manage, Statistics, Settings, and Quit actions. It exposes one NewAPI switch.
 
 NewAPI mode hides direct-account operations and shows only NewAPI status, CPA upstream status, both native management-page actions, Disable, and Quit. The collapsed status item displays a readable NewAPI health state rather than a direct-account quota.
+
+The connected state confirms that the local NewAPI service is running, setup is complete, and the saved Token can read a structurally valid `/v1/models` response. It does not require any specific model identifier: a catalog containing only `gpt-6-astra`, or an empty catalog, does not make the service unavailable. Model and channel availability remain NewAPI routing concerns, so connected does not guarantee that a particular model request will succeed. HTTP 401/403 still report an invalid Token; network failures, other unsuccessful HTTP responses, and malformed model catalogs still report the service as unavailable.

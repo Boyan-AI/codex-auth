@@ -71,7 +71,6 @@ enum NewAPIRuntimeError: LocalizedError, Equatable {
     case incompatibleConfiguration(String)
     case serviceCommandFailed(String)
     case unavailable(String)
-    case managedModelUnavailable(String)
     case managedCPAChannelConfigurationFailed(String)
     case browserOpenFailed
 
@@ -89,7 +88,6 @@ enum NewAPIRuntimeError: LocalizedError, Equatable {
         case .incompatibleConfiguration(let reason): return "NewAPI 配置不兼容：\(reason)"
         case .serviceCommandFailed(let reason): return "NewAPI 服务控制失败：\(reason)"
         case .unavailable(let reason): return "NewAPI 当前不可用：\(reason)"
-        case .managedModelUnavailable(let model): return "NewAPI 没有可用于默认分组的 \(model) 渠道。"
         case .managedCPAChannelConfigurationFailed(let reason): return "NewAPI 的 CPA 默认渠道配置失败：\(reason)"
         case .browserOpenFailed: return "无法使用系统浏览器打开 NewAPI 管理页。"
         }
@@ -350,7 +348,7 @@ struct URLSessionNewAPIHealthChecker: NewAPIHealthChecking {
         }
     }
 
-    /// 使用调用 Token 请求模型目录，区分无效凭据和普通服务故障。
+    /// 使用合法模型目录验证调用 Token，不把具体模型或渠道可用性当作服务健康条件。
     func validateAPIKey(_ configuration: NewAPIConfiguration) async throws {
         guard !configuration.apiKey.isEmpty else { throw NewAPIRuntimeError.missingAPIKey }
         var request = URLRequest(url: configuration.modelsURL)
@@ -368,10 +366,8 @@ struct URLSessionNewAPIHealthChecker: NewAPIHealthChecking {
             guard (200..<300).contains(http.statusCode) else {
                 throw NewAPIRuntimeError.unavailable("模型接口 HTTP \(http.statusCode)")
             }
-            let catalog = try NewAPIModelCatalog.decode(data)
-            guard catalog.modelIDs.contains(NewAPIModelCatalog.managedModel) else {
-                throw NewAPIRuntimeError.managedModelUnavailable(NewAPIModelCatalog.managedModel)
-            }
+            // 空目录也能证明 Token 通过认证；具体模型是否可调用由 NewAPI 渠道路由判断。
+            _ = try NewAPIModelCatalog.decode(data)
         } catch let error as NewAPIRuntimeError {
             throw error
         } catch {
@@ -400,8 +396,6 @@ struct URLSessionNewAPIHealthChecker: NewAPIHealthChecking {
 
 /// 保存健康检查所需的最小 NewAPI 模型目录。
 struct NewAPIModelCatalog: Equatable {
-    static let managedModel = "gpt-5.6-sol"
-
     let modelIDs: [String]
 
     /// 解码 OpenAI 兼容模型列表并忽略空白标识。

@@ -1,6 +1,7 @@
 import XCTest
 @testable import CodexAuthApp
 
+/// 覆盖 NewAPI 本机配置、健康检查与服务生命周期。
 @MainActor
 final class NewAPIRuntimeTests: XCTestCase {
     private var temporaryDirectory: URL!
@@ -101,21 +102,63 @@ final class NewAPIRuntimeTests: XCTestCase {
         XCTAssertEqual(requestedPaths, ["/api/status", "/api/setup", "/v1/models"])
     }
 
-    /// 验证模型目录不含受管模型时不能仅凭 HTTP 200 误报可用。
-    func testURLSessionHealthCheckerRejectsMissingManagedModel() async throws {
+    /// 验证只有其他模型或尚无模型时，健康服务和有效 Token 仍显示已连接。
+    func testRuntimeReportsRunningWithoutSpecificModel() async throws {
+        let checker = URLSessionNewAPIHealthChecker(session: makeURLSession())
+        let service = StubNewAPIServiceController(status: .running)
+        let runtime = makeRuntime(service: service, health: checker)
+
+        for catalog in [#"{"data":[{"id":"gpt-6-astra"}]}"#, #"{"data":[]}"#] {
+            RecordingNewAPIURLProtocol.handler = { request in
+                switch request.url?.path {
+                case "/api/status":
+                    return try Self.response(for: request, statusCode: 200, body: #"{"success":true}"#)
+                case "/api/setup":
+                    return try Self.response(for: request, statusCode: 200, body: #"{"success":true,"data":{"status":true}}"#)
+                case "/v1/models":
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-local-token")
+                    return try Self.response(for: request, statusCode: 200, body: catalog)
+                default:
+                    return try Self.response(for: request, statusCode: 404, body: "{}")
+                }
+            }
+
+            let status = await runtime.status()
+            XCTAssertEqual(status, .running, "Unexpected status for catalog: \(catalog)")
+        }
+    }
+
+    /// 验证 HTTP 200 仍须返回合法模型目录，避免把错误页面或错误结构当作健康服务。
+    func testURLSessionHealthCheckerRejectsMalformedModelCatalog() async throws {
+        let checker = URLSessionNewAPIHealthChecker(session: makeURLSession())
+        for body in ["<html>Service error</html>", "{}", #"{"data":[{"id":123}]}"#] {
+            RecordingNewAPIURLProtocol.handler = { request in
+                try Self.response(for: request, statusCode: 200, body: body)
+            }
+
+            do {
+                try await checker.validateAPIKey(try makeConfiguration())
+                XCTFail("Expected malformed catalog failure")
+            } catch {
+                guard case .unavailable = error as? NewAPIRuntimeError else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
+    /// 验证模型接口故障不会因为响应包含合法目录而被误报为健康。
+    func testURLSessionHealthCheckerRejectsModelServiceFailure() async throws {
         let checker = URLSessionNewAPIHealthChecker(session: makeURLSession())
         RecordingNewAPIURLProtocol.handler = { request in
-            try Self.response(for: request, statusCode: 200, body: #"{"data":[{"id":"gpt-5"}]}"#)
+            try Self.response(for: request, statusCode: 503, body: #"{"data":[]}"#)
         }
 
         do {
             try await checker.validateAPIKey(try makeConfiguration())
-            XCTFail("Expected missing managed model")
+            XCTFail("Expected model service failure")
         } catch {
-            XCTAssertEqual(
-                error as? NewAPIRuntimeError,
-                .managedModelUnavailable(NewAPIModelCatalog.managedModel)
-            )
+            XCTAssertEqual(error as? NewAPIRuntimeError, .unavailable("模型接口 HTTP 503"))
         }
     }
 
@@ -146,18 +189,20 @@ final class NewAPIRuntimeTests: XCTestCase {
         XCTAssertEqual(runner.arguments, [[]])
     }
 
-    /// 验证模型端点的认证拒绝会映射为 Token 无效。
+    /// 验证模型端点的 401 和 403 认证拒绝均映射为 Token 无效。
     func testURLSessionHealthCheckerMapsUnauthorizedToken() async throws {
         let checker = URLSessionNewAPIHealthChecker(session: makeURLSession())
-        RecordingNewAPIURLProtocol.handler = { request in
-            try Self.response(for: request, statusCode: 401, body: #"{"error":"unauthorized"}"#)
-        }
+        for statusCode in [401, 403] {
+            RecordingNewAPIURLProtocol.handler = { request in
+                try Self.response(for: request, statusCode: statusCode, body: #"{"error":"unauthorized"}"#)
+            }
 
-        do {
-            try await checker.validateAPIKey(try makeConfiguration())
-            XCTFail("Expected invalid token")
-        } catch {
-            XCTAssertEqual(error as? NewAPIRuntimeError, .invalidAPIKey)
+            do {
+                try await checker.validateAPIKey(try makeConfiguration())
+                XCTFail("Expected invalid token")
+            } catch {
+                XCTAssertEqual(error as? NewAPIRuntimeError, .invalidAPIKey)
+            }
         }
     }
 
@@ -269,10 +314,10 @@ final class NewAPIRuntimeTests: XCTestCase {
         )
     }
 
-    /// 构造使用测试替身的 NewAPI 运行时。
+    /// 组合服务替身和可替换的健康检查器，避免访问真实服务。
     private func makeRuntime(
         service: StubNewAPIServiceController,
-        health: StubNewAPIHealthChecker,
+        health: NewAPIHealthChecking,
         browser: RecordingNewAPIBrowser = RecordingNewAPIBrowser(),
         apiKey: String = "sk-local-token"
     ) -> NewAPIServiceRuntime {
