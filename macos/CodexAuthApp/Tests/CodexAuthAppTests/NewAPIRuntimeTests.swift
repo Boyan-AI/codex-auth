@@ -47,7 +47,7 @@ final class NewAPIRuntimeTests: XCTestCase {
     func testConfigurationStoreSavesTokenAtomically() throws {
         let configurationURL = temporaryDirectory.appendingPathComponent("client.json")
         try Data(
-            #"{"base_url":"http://127.0.0.1:3000/v1","api_key":"","runtime_version":"v1.0.0-codex-auth.4"}"#.utf8
+            #"{"base_url":"http://127.0.0.1:3000/v1","api_key":"","runtime_version":"v1.0.0-codex-auth.5"}"#.utf8
         ).write(to: configurationURL)
         let store = InstalledNewAPIConfigurationStore(configurationURL: configurationURL)
 

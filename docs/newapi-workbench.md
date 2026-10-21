@@ -18,9 +18,9 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
-The managed NewAPI runtime is built from the Boyan-AI fork commit `72f23e9`, which makes channel tests use the Codex CLI-compatible AnyRouter request contract. Its macOS arm64 asset reports `v1.0.0-codex-auth.4` and has SHA-256 `9cec840a68ca248bfaaff56d4bb35d8eed3d3e105fad558973e254e61687a301`.
+The managed NewAPI runtime is built from the Boyan-AI fork commit `1a13281a`, which adds bounded recovery for temporary CPA authentication unavailability and preserves the Codex CLI-compatible AnyRouter channel-test contract. Its macOS arm64 asset reports `v1.0.0-codex-auth.5` and has SHA-256 `b3319f7e84180853956e0985d7e0994b8146fa3aa86e43c04749c94bd38bd82d`.
 
-The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.4`; a release asset can be published beside the fork commit when distributing it.
+The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.5`; a release asset can be published beside the fork commit when distributing it.
 
 - Runtime root: `~/Library/Application Support/Codex Auth/NewAPI`
 - SQLite database: `data/new-api.db`
@@ -49,6 +49,8 @@ When NewAPI is enabled, Codex Auth starts NewAPI independently and treats CPA as
 The pinned NewAPI release scans `channels.channel_info` as JSON bytes rather than a plain SQLite text value. The managed-channel configurator therefore stores its empty channel metadata as a valid JSON BLOB; this keeps both the native channel page and the distributor's channel lookup compatible with the release schema.
 
 ### Upstream failure handling
+
+After ordinary channel retries are exhausted, the fork allows a separate recovery window for `POST /v1/responses` failures from the managed `Codex Auth CPA` channel at `http://127.0.0.1:8317`. Only HTTP `503` errors whose message starts with `auth_unavailable: no auth available` qualify. Recovery waits 2, 4, 8, then at most 15 seconds between attempts, with a 60-second budget measured from the first recovery wait; no new recovery attempt starts after that deadline. An attempt started within the budget retains the normal upstream request timeout. Client cancellation immediately stops the wait. Disabling retries, excluding 503 from retry statuses, or enforcing a single-attempt channel constraint also disables this recovery. Once response headers or content have been sent, both ordinary retries and recovery stop to avoid replaying a partial response. Recovery reuses the existing request and billing lifecycle. It cannot compensate for a permanently unavailable account or the absence of another compatible channel.
 
 The managed NewAPI contract enables bounded upstream failover. `RetryTimes` is set to `2`, so a failed request can try another credential or compatible channel without an unbounded retry loop. NewAPI automatically disables channels only for deterministic `401` and `403` failures, including balance and quota failures such as `403 insufficient balance`. A `400` model-compatibility failure (for example, a ChatGPT account that does not support the requested Codex model) is also eligible for the bounded retry status list, so NewAPI can continue to another credential or channel after CPA exhausts its own account candidates. Temporary `429`, network, and `5xx` failures remain eligible for later requests and are handled by the bounded retry status list, so a short upstream incident does not permanently quarantine a channel. Channel affinity is released when an affiliated channel is disabled so the next attempt can be selected.
 
