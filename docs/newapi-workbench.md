@@ -18,6 +18,8 @@ New Codex processes use one of these routes:
 
 ## Runtime And Data
 
+The macOS Settings command (`Command-,`) and the menu-bar panel's Settings entry share the same NewAPI Token form and application state. The system Settings window presents that form directly; the menu-bar entry presents it inside the management window.
+
 The managed NewAPI runtime is built from the Boyan-AI fork commit `1a13281a`, which adds bounded recovery for temporary CPA authentication unavailability and preserves the Codex CLI-compatible AnyRouter channel-test contract. Its macOS arm64 asset reports `v1.0.0-codex-auth.5` and has SHA-256 `b3319f7e84180853956e0985d7e0994b8146fa3aa86e43c04749c94bd38bd82d`.
 
 The installer requires both that exact version output and checksum before replacing any managed runtime file. The locally packaged macOS arm64 asset is `runtime/new-api-macos-v1.0.0-codex-auth.5`; a release asset can be published beside the fork commit when distributing it.

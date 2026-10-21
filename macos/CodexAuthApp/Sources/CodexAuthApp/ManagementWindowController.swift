@@ -215,8 +215,8 @@ private struct UsageManagementView: View {
     }
 }
 
-/// 仅保留真正可编辑的额度代理，并用简短说明标注生效范围。
-private struct SettingsManagementView: View {
+/// 系统设置窗口与管理窗口共用 NewAPI Token 编辑和服务状态页面。
+struct SettingsManagementView: View {
     @EnvironmentObject private var appState: AppState
     @State private var newAPITokenDraft = ""
     @State private var isEditingNewAPIToken = false

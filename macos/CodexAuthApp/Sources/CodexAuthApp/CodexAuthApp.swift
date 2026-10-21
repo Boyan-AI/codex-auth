@@ -50,9 +50,12 @@ struct CodexAuthMenuApp: App {
         }
     }
 
+    /// 系统设置入口复用管理页内容，注入同一状态并保留菜单栏控制器的生命周期。
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsManagementView()
+                .environmentObject(appState)
+                .frame(width: 600, height: 260)
                 // 显式绑定菜单栏控制器的生命周期，避免无窗口 App 启动后被系统回收。
                 .environmentObject(statusItemController)
         }
