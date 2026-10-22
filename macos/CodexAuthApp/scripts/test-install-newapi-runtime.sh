@@ -68,7 +68,7 @@ create_fixtures() {
     cat > "${BINARY_PATH}" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.5}"
+    echo "${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.6}"
 fi
 exit 0
 EOF
@@ -149,7 +149,7 @@ run_installer() {
     FAKE_LAUNCHCTL_LOG="${log_path}" \
     FAKE_LAUNCHCTL_STATE="${state_path}" \
     FAKE_NEWAPI_STATUS="${FAKE_NEWAPI_STATUS:-200}" \
-    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.5}" \
+    FAKE_NEWAPI_VERSION="${FAKE_NEWAPI_VERSION:-v1.0.0-codex-auth.6}" \
         "${PATCHED_INSTALLER}" "${BINARY_PATH}"
 }
 
@@ -202,7 +202,7 @@ test_fresh_install_is_stopped() {
 
     run_installer "${home_dir}" "${log_path}" "${state_path}"
 
-    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.5" "NewAPI version"
+    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.6" "NewAPI version"
     assert_file_exists "${runtime_dir}/bin/new-api"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-service"
     assert_file_exists "${runtime_dir}/bin/codex-auth-newapi-credential"
@@ -227,7 +227,7 @@ test_fresh_install_is_stopped() {
     printf '%s\n' "${state_path}" > "${TEMP_ROOT}/installed-state"
 }
 
-# 验证运行中升级保留 SQLite、Token 和会话密钥并恢复服务。
+# 验证从 .5 升级到 .6 保留 SQLite、Token 和会话密钥，并恢复原运行状态。
 test_running_upgrade_preserves_user_data() {
     local home_dir="$(<"${TEMP_ROOT}/installed-home")"
     local log_path="$(<"${TEMP_ROOT}/installed-log")"
@@ -238,12 +238,21 @@ test_running_upgrade_preserves_user_data() {
     local original_secret=""
     original_secret="$(/usr/bin/plutil -extract session_secret raw -o - "${runtime_dir}/server.json")"
     /usr/bin/plutil -replace api_key -string "sk-preserved" "${client_path}"
+    # 在隔离目录模拟旧版契约，不能用同版本重装代替跨版本保留数据的验证。
+    printf '%s\n' 'v1.0.0-codex-auth.5' > "${runtime_dir}/VERSION"
+    /usr/bin/plutil -replace runtime_version -string "v1.0.0-codex-auth.5" "${client_path}"
+    /usr/bin/plutil -replace runtime_version -string "v1.0.0-codex-auth.5" "${runtime_dir}/server.json"
     printf '%s' "sqlite-user-data" > "${database_path}"
     printf 'gui/%s/%s\n' "${USER_ID}" "${SERVICE_LABEL}" > "${state_path}"
     : > "${log_path}"
 
     run_installer "${home_dir}" "${log_path}" "${state_path}"
 
+    assert_equal "$(<"${runtime_dir}/VERSION")" "v1.0.0-codex-auth.6" "Upgraded version"
+    assert_equal "$(/usr/bin/plutil -extract runtime_version raw -o - "${client_path}")" \
+        "v1.0.0-codex-auth.6" "Upgraded client version"
+    assert_equal "$(/usr/bin/plutil -extract runtime_version raw -o - "${runtime_dir}/server.json")" \
+        "v1.0.0-codex-auth.6" "Upgraded server version"
     assert_equal "$(/usr/bin/plutil -extract api_key raw -o - "${client_path}")" "sk-preserved" "Preserved token"
     assert_equal "$(<"${database_path}")" "sqlite-user-data" "Preserved SQLite data"
     assert_equal "$(/usr/bin/plutil -extract session_secret raw -o - "${runtime_dir}/server.json")" \

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "manifest_version": "2026-10-21.1",
+  "manifest_version": "2026-10-22.1",
   "release_url": "https://github.com/Boyan-AI/codex-auth/releases/latest",
   "components": {
     "newapi": {
-      "version": "v1.0.0-codex-auth.5",
+      "version": "v1.0.0-codex-auth.6",
       "asset_url": "",
-      "sha256": "b3319f7e84180853956e0985d7e0994b8146fa3aa86e43c04749c94bd38bd82d"
+      "sha256": "438a8f5a838f585c50bdfd5eb193c332b219dc369557f14fcf4b9aa6aed663d0"
     },
     "cpa": {
       "version": "7.2.120",

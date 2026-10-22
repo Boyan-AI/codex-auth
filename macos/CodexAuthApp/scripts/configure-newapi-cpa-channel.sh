@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-readonly EXPECTED_NEWAPI_VERSION="v1.0.0-codex-auth.5"
+readonly EXPECTED_NEWAPI_VERSION="v1.0.0-codex-auth.6"
 readonly MANAGED_NAME="Codex Auth CPA"
 readonly MANAGED_REMARK="Managed by Codex Auth. Uses the local CPA default API key."
 readonly MANAGED_GROUP="default"

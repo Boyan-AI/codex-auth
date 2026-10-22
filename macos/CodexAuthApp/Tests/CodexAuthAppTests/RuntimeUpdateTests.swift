@@ -8,9 +8,9 @@ final class RuntimeUpdateTests: XCTestCase {
         let manifest = try RuntimeUpdateManifest.bundled.validated()
         XCTAssertEqual(manifest.schemaVersion, 1)
         XCTAssertEqual(Set(manifest.components.keys), ["newapi", "cpa", "cpamp"])
-        XCTAssertEqual(manifest.manifestVersion, "2026-10-21.1")
-        XCTAssertEqual(manifest.components["newapi"]?.version, "v1.0.0-codex-auth.5")
-        XCTAssertEqual(manifest.components["newapi"]?.sha256, "b3319f7e84180853956e0985d7e0994b8146fa3aa86e43c04749c94bd38bd82d")
+        XCTAssertEqual(manifest.manifestVersion, "2026-10-22.1")
+        XCTAssertEqual(manifest.components["newapi"]?.version, "v1.0.0-codex-auth.6")
+        XCTAssertEqual(manifest.components["newapi"]?.sha256, "438a8f5a838f585c50bdfd5eb193c332b219dc369557f14fcf4b9aa6aed663d0")
         XCTAssertFalse(manifest.isInstallable)
     }
 
@@ -22,7 +22,7 @@ final class RuntimeUpdateTests: XCTestCase {
 
     /// 验证同日递增的清单版本可以识别为更新。
     func testManifestOrderingUsesNumericVersion() {
-        XCTAssertTrue(RuntimeUpdateManifest(schemaVersion: 1, manifestVersion: "2026-10-21.2", releaseURL: "https://example.com", components: [:]).isNewer(than: RuntimeUpdateManifest.bundled))
+        XCTAssertTrue(RuntimeUpdateManifest(schemaVersion: 1, manifestVersion: "2026-10-22.2", releaseURL: "https://example.com", components: [:]).isNewer(than: RuntimeUpdateManifest.bundled))
         XCTAssertFalse(RuntimeUpdateManifest.bundled.isNewer(than: RuntimeUpdateManifest.bundled))
     }
 }

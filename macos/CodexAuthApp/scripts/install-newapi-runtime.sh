@@ -3,8 +3,8 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly EXPECTED_NEWAPI_VERSION="v1.0.0-codex-auth.5"
-readonly EXPECTED_NEWAPI_SHA256="b3319f7e84180853956e0985d7e0994b8146fa3aa86e43c04749c94bd38bd82d"
+readonly EXPECTED_NEWAPI_VERSION="v1.0.0-codex-auth.6"
+readonly EXPECTED_NEWAPI_SHA256="438a8f5a838f585c50bdfd5eb193c332b219dc369557f14fcf4b9aa6aed663d0"
 readonly LAUNCH_AGENT_LABEL="com.codex-auth.newapi"
 readonly LAUNCHCTL_BIN="/bin/launchctl"
 readonly CURL_BIN="/usr/bin/curl"

@@ -44,7 +44,7 @@ create_fixture() {
     local runtime_dir="${fixture_root}/NewAPI"
     local cpa_dir="${fixture_root}/CPA"
     install -d -m 700 "${runtime_dir}/data" "${runtime_dir}/backups" "${cpa_dir}"
-    printf '%s\n' 'v1.0.0-codex-auth.5' > "${runtime_dir}/VERSION"
+    printf '%s\n' 'v1.0.0-codex-auth.6' > "${runtime_dir}/VERSION"
     printf '{"base_url":"http://127.0.0.1:8317/v1","api_key":"%s"}\n' "${cpa_key}" > "${cpa_dir}/client.json"
     printf '%s\n' '{"data":[{"id":"gpt-5.6-terra"},{"id":"gpt-5.6-sol"},{"id":"gpt-5.5"},{"id":"gpt-5.6-terra"},{"id":"  "}]}' > "${cpa_dir}/models.json"
     chmod 600 "${runtime_dir}/VERSION" "${cpa_dir}/client.json" "${cpa_dir}/models.json"
