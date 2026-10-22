@@ -66,6 +66,12 @@ The fork extends NewAPI's native multi-key dialog with per-Key aliases and a tes
 
 Codex Auth never stores the NewAPI administrator password. The calling Token is stored only in protected `client.json`; `config.toml`, process arguments, registry JSON, and GUI JSON contain no Token value.
 
+## Live Request Verification
+
+On 2026-10-22, the installed `v1.0.0-codex-auth.6` runtime with the checksum above passed one real streaming `POST /v1/responses` request using the saved client Token and normal channel selection. The requested model was `gpt-6.1-sol`, and the only input was `Reply with exactly OK.`. The response returned HTTP `200`, emitted `response.completed` with status `completed`, and produced `OK` in 3.495 seconds. Usage was 11 input Tokens and 38 output Tokens, including 31 reasoning Tokens; NewAPI recorded a charge of `$0.006526`.
+
+The native consume log matched request ID `202610221303024425370008268d9d65Zn5tkMI` to channel `2` (AgentRouter), group `default`, and stream status `ok`. Channel enablement and the user's direct route were preserved, and the temporary verification service was stopped afterward. This verifies one successful request through the installed runtime, not sustained upstream availability or recovery after an actual outage. The five-attempt limit, 60-second recovery budget, cancellation, and response-commit boundaries are covered separately by deterministic regression tests; no upstream outage was induced for this check.
+
 ## Lifecycle
 
 Enable order:
